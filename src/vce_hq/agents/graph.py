@@ -1,0 +1,124 @@
+"""LangGraph graph definition — the full agent pipeline.
+
+Defines the directed graph that orchestrates the agent swarm:
+    Event → Router → [OS Agent | Cloud Agent] → Security Review → Output
+
+The graph uses conditional edges based on the Router's classification
+to determine which specialist agents to invoke and in what order.
+
+This is the central orchestration module — it wires together all
+agents into a single executable graph.
+"""
+
+import logging
+import sqlite3
+
+from langgraph.graph import END, StateGraph
+
+from vce_hq.agents.cloud_engineer import create_cloud_engineer_node
+from vce_hq.agents.finops_agent import create_finops_agent_node
+from vce_hq.agents.os_engineer import create_os_engineer_node
+from vce_hq.agents.router import create_router_node
+from vce_hq.agents.security_review import create_security_review_node
+from vce_hq.agents.state import AgentState
+from vce_hq.discovery.probe import EnvironmentProfile
+from vce_hq.embeddings.service import EmbeddingService
+from vce_hq.vault.manager import CredentialManager
+
+logger = logging.getLogger(__name__)
+
+
+def build_agent_graph(
+    conn: sqlite3.Connection,
+    embedding_service: EmbeddingService,
+    credential_manager: CredentialManager,
+    env_profile: EnvironmentProfile | None = None,
+) -> StateGraph:
+    """Build and compile the full agent graph.
+
+    The graph topology:
+        router → (conditional) → os_engineer and/or cloud_engineer → security_review → END
+
+    Routing logic (determined by Router node):
+        - "os"    → os_engineer → security_review
+        - "cloud" → cloud_engineer → security_review
+        - "finops" → finops_agent → security_review
+        - "multi" → first agent in sequence → second agent → security_review
+
+    Args:
+        conn: Tenant-scoped SQLite connection.
+        embedding_service: Shared embedding service for RAG.
+        credential_manager: Vault credential manager for injecting cloud
+            CLI credentials into the Cloud Engineer agent.
+        env_profile: Auto-discovered environment profile. Passed to all
+            agents so they have runtime infrastructure awareness.
+
+    Returns:
+        A compiled LangGraph ``StateGraph`` ready for invocation.
+    """
+    # Create node functions
+    router_node = create_router_node(conn, env_profile=env_profile)
+    os_node = create_os_engineer_node(conn, embedding_service, credential_manager, env_profile=env_profile)
+    cloud_node = create_cloud_engineer_node(conn, embedding_service, credential_manager, env_profile=env_profile)
+    finops_node = create_finops_agent_node(conn, embedding_service, credential_manager, env_profile=env_profile)
+    security_node = create_security_review_node(conn, embedding_service)
+
+    # Build the graph
+    graph = StateGraph(AgentState)
+
+    # Add nodes
+    graph.add_node("router", router_node)
+    graph.add_node("os_engineer", os_node)
+    graph.add_node("cloud_engineer", cloud_node)
+    graph.add_node("finops_agent", finops_node)
+    graph.add_node("security_review", security_node)
+
+    # Set entry point
+    graph.set_entry_point("router")
+
+    # Conditional routing after the Router node
+    graph.add_conditional_edges(
+        "router",
+        _route_after_router,
+        {
+            "os_engineer": "os_engineer",
+            "cloud_engineer": "cloud_engineer",
+            "finops_agent": "finops_agent",
+            "security_review": "security_review",
+            "error": END,
+        },
+    )
+
+    # After OS Engineer: always return to Router for next steps
+    graph.add_edge("os_engineer", "router")
+
+    # After Cloud Engineer: always return to Router for next steps
+    graph.add_edge("cloud_engineer", "router")
+
+    # After FinOps Agent: always return to Router for next steps
+    graph.add_edge("finops_agent", "router")
+
+    # After Security Review: end
+    graph.add_edge("security_review", END)
+
+    return graph.compile()
+
+
+def _route_after_router(state: AgentState) -> str:
+    """Determine which agent to invoke next based on Router's delegation.
+
+    Args:
+        state: Current graph state after Router execution.
+
+    Returns:
+        The name of the next node to invoke.
+    """
+    if state.get("error"):
+        return "error"
+
+    target = state.get("delegate_to", "security_review")
+    
+    if target in ["os_engineer", "cloud_engineer", "finops_agent", "security_review"]:
+        return target
+    
+    return "security_review"

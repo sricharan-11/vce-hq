@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VCE-HQ | AI Infrastructure Operations</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <nav class="sidebar">
+            <div class="logo">
+                <i class="fa-solid fa-server"></i>
+                <h2>VCE-HQ</h2>
+            </div>
+            
+            <div class="tenant-selector">
+                <label for="tenantId">Current Tenant</label>
+                <div class="input-icon">
+                    <i class="fa-solid fa-building"></i>
+                    <input type="text" id="tenantId" value="tenant-123" placeholder="Enter Tenant ID">
+                </div>
+            </div>
+
+            <ul class="nav-links">
+                <li class="active" data-view="analyze"><i class="fa-solid fa-microchip"></i> Brain Analysis</li>
+                <li data-view="knowledge"><i class="fa-solid fa-book"></i> Knowledge Library</li>
+                <li data-view="vault"><i class="fa-solid fa-vault"></i> The Vault</li>
+            </ul>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="top-nav">
+                <div class="status-indicator">
+                    <span class="pulse"></span>
+                    Agent Swarm Online
+                </div>
+                
+                <!-- Notification Center -->
+                <div class="notifications-container" style="position: relative; margin-left: auto; display: flex; align-items: center;">
+                    <button id="notifBtn" class="icon-btn" style="background: none; border: none; cursor: pointer; font-size: 1.2rem; color: #a1a1aa; position: relative;">
+                        <i class="fa-solid fa-bell"></i>
+                        <span id="notifBadge" class="badge" style="display: none; position: absolute; top: -5px; right: -5px; background: #ef4444; color: white; font-size: 0.65rem; padding: 2px 5px; border-radius: 50%; font-weight: bold;">0</span>
+                    </button>
+                    <!-- Dropdown Menu -->
+                    <div id="notifDropdown" class="notif-dropdown" style="display: none; position: absolute; right: 0; top: 120%; width: 400px; background: #1e1e24; border: 1px solid #333; border-radius: 8px; z-index: 1000; box-shadow: 0 10px 25px rgba(0,0,0,0.5); max-height: 500px; overflow-y: auto;">
+                        <div style="padding: 12px 15px; border-bottom: 1px solid #333; font-weight: 600; color: white; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: #1e1e24; z-index: 10;">
+                            <span><i class="fa-solid fa-chart-line" style="color: #3b82f6; margin-right: 8px;"></i> Automated FinOps Reports</span>
+                            <button id="refreshNotifBtn" style="background:none; border:none; color:#a1a1aa; cursor:pointer; font-size: 1rem; transition: color 0.2s;"><i class="fa-solid fa-arrows-rotate"></i></button>
+                        </div>
+                        <div id="notifList" style="padding: 10px; color: #a1a1aa; font-size: 0.9rem;">
+                            <div style="text-align: center; padding: 20px; color: #666;">No automated reports found.</div>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Analyze View -->
+            <div id="analyzeView" class="view active">
+                <div class="view-header">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <h1>Infrastructure Analysis</h1>
+                            <p>Ask the agent swarm to diagnose issues or analyze infrastructure.</p>
+                        </div>
+                        <button id="newChatBtn" class="btn-secondary" title="Start a new conversation">
+                            <i class="fa-solid fa-plus"></i> New Chat
+                        </button>
+                    </div>
+                </div>
+
+                <div class="chat-container">
+                    <div class="chat-history" id="chatHistory">
+                        <!-- Chat messages will appear here -->
+                    </div>
+                    
+                    <div class="input-area">
+                        <textarea id="queryInput" placeholder="e.g. Why is the CPU spiking on my production database?"></textarea>
+                        <button id="sendQueryBtn" class="btn-primary">
+                            <i class="fa-solid fa-paper-plane"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Knowledge View -->
+            <div id="knowledgeView" class="view hidden">
+                <div class="view-header">
+                    <h1>Knowledge Library (LTM)</h1>
+                    <p>Upload runbooks, ADRs, and post-mortems to your vector database.</p>
+                </div>
+
+                <div class="vault-container" style="display: block;">
+                    <div class="card add-credential-card" style="max-width: 100%;">
+                        <h3>Ingest Document</h3>
+                        <form id="ingestKnowledgeForm">
+                            <div class="form-group">
+                                <label for="docName">Document Name</label>
+                                <input type="text" id="docName" required placeholder="e.g. redis-oom-playbook.md">
+                            </div>
+                            <div class="form-group">
+                                <label for="docCategory">Category</label>
+                                <select id="docCategory" required>
+                                    <option value="runbook">Runbook</option>
+                                    <option value="adr">ADR</option>
+                                    <option value="post_mortem">Post-Mortem</option>
+                                    <option value="infra_inventory">Infrastructure Inventory</option>
+                                    <option value="diagnostic_pattern">Diagnostic Pattern</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="docContent">Document Content (Markdown/Text)</label>
+                                <textarea id="docContent" required placeholder="# Playbook: Redis OOM..." style="height: 300px; font-family: monospace; resize: vertical;"></textarea>
+                            </div>
+                            <button type="submit" class="btn-primary"><i class="fa-solid fa-upload"></i> Ingest to LTM</button>
+                        </form>
+                    </div>
+
+                    <div class="card credential-list-card" style="margin-top: 2rem;">
+                        <div class="card-header">
+                            <h3>Ingested Documents</h3>
+                            <button id="refreshKnowledgeBtn" class="btn-secondary btn-small"><i class="fa-solid fa-arrows-rotate"></i></button>
+                        </div>
+                        <div class="table-container">
+                            <table id="knowledgeTable">
+                                <thead>
+                                    <tr>
+                                        <th>Document Name</th>
+                                        <th>Category</th>
+                                        <th>Chunks</th>
+                                        <th>Ingested At</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <!-- Populated by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Vault View -->
+            <div id="vaultView" class="view hidden">
+                <div class="view-header">
+                    <h1>The Vault</h1>
+                    <p>Securely manage service accounts and credentials for the agent swarm.</p>
+                </div>
+
+                <div class="vault-container">
+                    <div class="card add-credential-card">
+                        <h3>Add New Credential</h3>
+                        <form id="addCredentialForm">
+                            <div class="form-group">
+                                <label for="credName">Credential Name</label>
+                                <input type="text" id="credName" required placeholder="e.g. AWS Production Read-Only">
+                            </div>
+                            <div class="form-group">
+                                <label for="credProvider">Provider</label>
+                                <select id="credProvider" required>
+                                    <option value="aws">AWS</option>
+                                    <option value="gcp">Google Cloud</option>
+                                    <option value="azure">Azure</option>
+                                    <option value="kubernetes">Kubernetes</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="credValue">Service Account Key / Token</label>
+                                <textarea id="credValue" required placeholder="Paste JSON key or token here..."></textarea>
+                            </div>
+                            <button type="submit" class="btn-primary">Securely Store</button>
+                        </form>
+                    </div>
+
+                    <div class="card list-credential-card">
+                        <div class="card-header">
+                            <h3>Stored Credentials</h3>
+                            <button id="refreshCredsBtn" class="btn-icon"><i class="fa-solid fa-rotate-right"></i></button>
+                        </div>
+                        <ul class="credential-list" id="credentialList">
+                            <!-- Credentials will be loaded here -->
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
