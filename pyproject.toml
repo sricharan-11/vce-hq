@@ -14,6 +14,7 @@ dependencies = [
     "pydantic-settings>=2.6.0",
     "langgraph>=0.2.0",
     "langchain-google-genai>=2.0.0",
+    "google-generativeai>=0.8.0",
     "sqlite-vec>=0.1.6",
     "structlog>=24.4.0",
     "python-multipart>=0.0.12",

@@ -23,6 +23,14 @@ data/
 *.swp
 *.swo
 
+# Docs (internal PRDs, guides — keep README.md only)
+*.md
+!README.md
+
 # OS
 .DS_Store
 Thumbs.db
+
+# Markdown
+*.md
+.md
