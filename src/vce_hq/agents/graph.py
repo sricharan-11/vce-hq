@@ -116,6 +116,14 @@ def _route_after_router(state: AgentState) -> str:
     if state.get("error"):
         return "error"
 
+    iterations = state.get("router_iterations", 0)
+    from vce_hq.config import settings
+    max_iterations = settings.router_max_iterations
+
+    if iterations >= max_iterations:
+        logger.warning("Router: max iterations (%d) reached, forcing security_review", max_iterations)
+        return "security_review"
+
     target = state.get("delegate_to", "security_review")
     
     if target in ["os_engineer", "cloud_engineer", "finops_agent", "security_review"]:

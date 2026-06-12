@@ -84,4 +84,5 @@ class AgentState(TypedDict, total=False):
     # Control
     error: str
     current_agent: str
+    router_iterations: int
 

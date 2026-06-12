@@ -153,9 +153,20 @@ def create_router_node(
         if state.get("session_id"):
             conversation = stm.get_conversation_text(state["session_id"])
 
+        # Iteration tracking
+        iterations = state.get("router_iterations", 0) + 1
+        max_iterations = settings.router_max_iterations
+        
         messages = [
             ("system", _ROUTER_SYSTEM_PROMPT),
         ]
+        
+        messages.append(
+            ("system", 
+             f"You are on Router iteration {iterations}/{max_iterations}. "
+             f"If this is your last iteration, you MUST delegate to 'security_review'.")
+        )
+        
         if env_context:
             messages.append(("system", env_context))
         if conversation:
@@ -219,6 +230,10 @@ def create_router_node(
             instruction = result.get("instruction", "Proceed with analysis")
             target = result.get("delegate_to", "security_review")
             
+            # If we hit the max iterations, override the target
+            if iterations >= max_iterations:
+                target = "security_review"
+            
             # Log the router's decision to STM
             stm.add_turn(ConversationTurn(
                 session_id=state.get("session_id", ""),
@@ -233,6 +248,7 @@ def create_router_node(
                 "delegate_to": target,
                 "current_agent": "router",
                 "conversation_history": conversation,
+                "router_iterations": iterations,
             }
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.error("Router failed to parse LLM response: %s", e)

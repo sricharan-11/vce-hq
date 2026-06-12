@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     cmd_max_stdout_bytes: int = 65536   # 64 KB
     cmd_max_stderr_bytes: int = 16384   # 16 KB
     cmd_enabled: bool = True
+    
+    # Orchestration
+    router_max_iterations: int = 3
 
     def tenant_db_path(self, tenant_id: str) -> Path:
         """Return the SQLite database path for a given tenant.
