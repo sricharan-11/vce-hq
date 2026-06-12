@@ -30,7 +30,3 @@ data/
 # OS
 .DS_Store
 Thumbs.db
-
-# Markdown
-*.md
-.md
