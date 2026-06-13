@@ -124,16 +124,21 @@ async def analyze_query(
             len(env_profile.running_vms),
         )
 
-        graph = build_agent_graph(conn, embedding_service, credential_manager, env_profile=env_profile)
-        result = await asyncio.to_thread(
-            graph.invoke,
-            {
-                "tenant_id": tenant_id,
-                "session_id": session.session_id,
-                "user_query": request.query,
-            },
-            config={"configurable": {"thread_id": session.session_id}}
-        )
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+        from vce_hq.config import get_settings
+        app_settings = get_settings()
+        db_path = str(app_settings.tenant_db_path(tenant_id))
+
+        async with AsyncSqliteSaver.from_conn_string(db_path) as checkpointer:
+            graph = build_agent_graph(conn, embedding_service, credential_manager, env_profile=env_profile, checkpointer=checkpointer)
+            result = await graph.ainvoke(
+                {
+                    "tenant_id": tenant_id,
+                    "session_id": session.session_id,
+                    "user_query": request.query,
+                },
+                config={"configurable": {"thread_id": session.session_id}}
+            )
 
         if result.get("hitl_pending"):
             final_status = "requires_approval"
@@ -192,18 +197,24 @@ async def approve_hitl(
 
     try:
         env_profile = await get_environment_profile()
-        graph = build_agent_graph(conn, embedding_service, credential_manager, env_profile=env_profile)
-        
-        # We need to get the current state and inject the approval.
-        config = {"configurable": {"thread_id": session_id}}
-        
-        if request.approved:
-            # Tell the agent that the command was approved.
-            # In a full implementation, we might execute the command here or let the agent execute it.
-            # For simplicity, we just resume the graph which will go to the router.
-            pass
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+        from vce_hq.config import get_settings
+        app_settings = get_settings()
+        db_path = str(app_settings.tenant_db_path(tenant_id))
+
+        async with AsyncSqliteSaver.from_conn_string(db_path) as checkpointer:
+            graph = build_agent_graph(conn, embedding_service, credential_manager, env_profile=env_profile, checkpointer=checkpointer)
             
-        result = await asyncio.to_thread(graph.invoke, None, config=config)
+            # We need to get the current state and inject the approval.
+            config = {"configurable": {"thread_id": session_id}}
+            
+            if request.approved:
+                # Tell the agent that the command was approved.
+                # In a full implementation, we might execute the command here or let the agent execute it.
+                # For simplicity, we just resume the graph which will go to the router.
+                pass
+                
+            result = await graph.ainvoke(None, config=config)
         
         if result.get("hitl_pending"):
             final_status = "requires_approval"

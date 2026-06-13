@@ -34,6 +34,7 @@ def build_agent_graph(
     embedding_service: EmbeddingService,
     credential_manager: CredentialManager,
     env_profile: EnvironmentProfile | None = None,
+    checkpointer=None,
 ) -> StateGraph:
     """Build and compile the full agent graph.
 
@@ -113,7 +114,8 @@ def build_agent_graph(
     # After Security Review: end
     graph.add_edge("security_review", END)
 
-    checkpointer = SqliteSaver(conn)
+    if checkpointer is None:
+        checkpointer = SqliteSaver(conn)
 
     return graph.compile(
         checkpointer=checkpointer,
