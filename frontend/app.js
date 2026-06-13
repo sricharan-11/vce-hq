@@ -28,6 +28,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 loadCredentials();
             } else if (viewId === 'knowledge') {
                 fetchKnowledge();
+            } else if (viewId === 'finops') {
+                fetchFinopsData();
             }
         });
     });
@@ -37,6 +39,9 @@ document.addEventListener('DOMContentLoaded', () => {
         currentTenant = e.target.value;
         if(!document.getElementById('vaultView').classList.contains('hidden')) {
             loadCredentials();
+        }
+        if(!document.getElementById('finopsView').classList.contains('hidden')) {
+            fetchFinopsData();
         }
         fetchAutomatedReports(); // refresh reports for new tenant
     });
@@ -537,6 +542,94 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
     
+    // --- FinOps Token Usage ---
+    let finopsData = null;
+    let currentFinopsPeriod = 'day';
+    
+    const refreshFinopsBtn = document.getElementById('refreshFinopsBtn');
+    if (refreshFinopsBtn) {
+        refreshFinopsBtn.addEventListener('click', fetchFinopsData);
+    }
+    
+    const finopsTabs = document.querySelectorAll('.finops-tabs .tab-btn');
+    finopsTabs.forEach(tab => {
+        tab.addEventListener('click', (e) => {
+            finopsTabs.forEach(t => t.classList.remove('active'));
+            e.target.classList.add('active');
+            currentFinopsPeriod = e.target.getAttribute('data-period');
+            renderFinopsData();
+        });
+    });
+
+    async function fetchFinopsData() {
+        if (!currentTenant) return;
+        
+        try {
+            const response = await fetch('/finops/token-usage', {
+                headers: { 'X-Tenant-ID': currentTenant }
+            });
+            
+            if (response.ok) {
+                finopsData = await response.json();
+                renderFinopsData();
+            } else {
+                console.error("Failed to fetch finops data");
+            }
+        } catch (error) {
+            console.error("Error fetching finops data", error);
+        }
+    }
+
+    function renderFinopsData() {
+        if (!finopsData) return;
+        
+        const periodData = finopsData[currentFinopsPeriod];
+        if (!periodData) return;
+        
+        // Render Metric Grid
+        const grid = document.getElementById('tokenMetricsGrid');
+        grid.innerHTML = `
+            <div class="card" style="text-align: center;">
+                <h4 style="color: var(--text-muted); margin-bottom: 5px;">Total Tokens</h4>
+                <div style="font-size: 2rem; font-weight: 700; color: var(--text-primary);">${periodData.total_tokens.toLocaleString()}</div>
+            </div>
+            <div class="card" style="text-align: center;">
+                <h4 style="color: var(--text-muted); margin-bottom: 5px;">Prompt Tokens</h4>
+                <div style="font-size: 2rem; font-weight: 700; color: var(--accent);">${periodData.prompt_tokens.toLocaleString()}</div>
+            </div>
+            <div class="card" style="text-align: center;">
+                <h4 style="color: var(--text-muted); margin-bottom: 5px;">Completion Tokens</h4>
+                <div style="font-size: 2rem; font-weight: 700; color: var(--success);">${periodData.completion_tokens.toLocaleString()}</div>
+            </div>
+            <div class="card" style="text-align: center;">
+                <h4 style="color: var(--text-muted); margin-bottom: 5px;">Reasoning Tokens</h4>
+                <div style="font-size: 2rem; font-weight: 700; color: var(--warning);">${periodData.reasoning_tokens.toLocaleString()}</div>
+            </div>
+        `;
+        
+        // Render Agent Breakdown Table
+        const tbody = document.querySelector('#agentTokensTable tbody');
+        tbody.innerHTML = '';
+        
+        const byAgent = periodData.by_agent;
+        if (Object.keys(byAgent).length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-secondary);">No token usage recorded for this period.</td></tr>';
+            return;
+        }
+        
+        for (const [agent, stats] of Object.entries(byAgent)) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td style="font-weight: 600; color: var(--accent);"><i class="fa-solid fa-robot" style="margin-right: 8px;"></i>${agent}</td>
+                <td>${stats.prompt_tokens.toLocaleString()}</td>
+                <td>${stats.completion_tokens.toLocaleString()}</td>
+                <td>${stats.reasoning_tokens.toLocaleString()}</td>
+                <td style="font-weight: bold;">${stats.total_tokens.toLocaleString()}</td>
+            `;
+            tbody.appendChild(tr);
+        }
+    }
+
     // Initial welcome message
     appendMessage(`<h2>Welcome to VCE-HQ Swarm</h2><p>I am your autonomous infrastructure operations advisor. You can ask me to analyze alerts, debug issues across Kubernetes, AWS, or GCP, and generate root-cause analyses.</p><p><em>Be sure to add your service accounts to <strong>The Vault</strong> first so I can safely retrieve live logs and metrics during diagnosis!</em></p>`, 'agent');
 });

@@ -29,6 +29,7 @@
                 <li class="active" data-view="analyze"><i class="fa-solid fa-microchip"></i> Brain Analysis</li>
                 <li data-view="knowledge"><i class="fa-solid fa-book"></i> Knowledge Library</li>
                 <li data-view="vault"><i class="fa-solid fa-vault"></i> The Vault</li>
+                <li data-view="finops"><i class="fa-solid fa-coins"></i> Token Usage</li>
             </ul>
         </nav>
 
@@ -186,6 +187,54 @@
                         <ul class="credential-list" id="credentialList">
                             <!-- Credentials will be loaded here -->
                         </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- FinOps View -->
+            <div id="finopsView" class="view hidden">
+                <div class="view-header">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <h1>Token Usage Dashboard</h1>
+                            <p>Track aggregated LLM token usage and reasoning costs for this tenant.</p>
+                        </div>
+                        <button id="refreshFinopsBtn" class="btn-secondary" title="Refresh data">
+                            <i class="fa-solid fa-arrows-rotate"></i> Refresh
+                        </button>
+                    </div>
+                </div>
+
+                <div class="finops-container" style="display: block; margin-top: 20px;">
+                    <div class="finops-tabs" style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid #333; padding-bottom: 10px;">
+                        <button class="tab-btn active" data-period="day">Last 24 Hours</button>
+                        <button class="tab-btn" data-period="week">Last 7 Days</button>
+                        <button class="tab-btn" data-period="month">Last 30 Days</button>
+                        <button class="tab-btn" data-period="overall">Overall</button>
+                    </div>
+
+                    <div class="metric-grid" id="tokenMetricsGrid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 2rem;">
+                        <!-- JS populated -->
+                    </div>
+
+                    <div class="card">
+                        <h3>Agent Breakdown</h3>
+                        <div class="table-container" style="margin-top: 15px;">
+                            <table id="agentTokensTable">
+                                <thead>
+                                    <tr>
+                                        <th>Agent</th>
+                                        <th>Prompt Tokens</th>
+                                        <th>Completion Tokens</th>
+                                        <th>Reasoning Tokens</th>
+                                        <th>Total Tokens</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <!-- JS populated -->
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             </div>
