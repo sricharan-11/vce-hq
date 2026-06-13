@@ -46,6 +46,9 @@ class AgentState(TypedDict, total=False):
 
         error: Error message if any step fails.
         current_agent: Tracks which agent is currently executing.
+        hitl_pending: True if the system is waiting for user approval.
+        hitl_command: The command waiting for approval.
+        hitl_reason: The reason given by the security gate.
     """
 
     # Identity
@@ -85,4 +88,7 @@ class AgentState(TypedDict, total=False):
     error: str
     current_agent: str
     router_iterations: int
+    hitl_pending: bool
+    hitl_command: str
+    hitl_reason: str
 

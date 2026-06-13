@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 
 from vce_hq.config import settings
 from vce_hq.execution.validator import CommandDomain, ValidationResult, validate_command
+from vce_hq.execution.security_gate import review_command, GateDecision
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,8 @@ class CommandExecutor:
         self._max_stdout = max_stdout_bytes or settings.cmd_max_stdout_bytes
         self._max_stderr = max_stderr_bytes or settings.cmd_max_stderr_bytes
 
+        self._mode = int(str(settings.execution_mode)[-1]) # 1, 2, or 3
+
     async def execute(
         self,
         command: str,
@@ -110,6 +113,9 @@ class CommandExecutor:
         env_overrides: dict[str, str] | None = None,
         reasoning: str = "",
         use_shell: bool = False,
+        original_query: str = "",
+        adrs_context: str = "",
+        skip_gate: bool = False,
     ) -> CommandResult:
         """Validate and execute a command.
 
@@ -128,6 +134,7 @@ class CommandExecutor:
                 the container's full PATH (including cloud CLIs) is available.
                 This is required for Cloud Engineer commands (gcloud, aws, az,
                 kubectl). OS Engineer commands run without a shell for safety.
+            skip_gate: Bypass the LLM security gate (used for approved HITL commands).
 
         Returns:
             A ``CommandResult`` with captured output and metadata.
@@ -156,6 +163,72 @@ class CommandExecutor:
                 validated_by=f"{validation.status.value}",
                 truncated=False,
             )
+
+        matched_tier = validation.matched_tier
+
+        # Check mode capability
+        if matched_tier and matched_tier > self._mode:
+            logger.warning(
+                "Command execution DENIED (Mode limitation) | agent=%s cmd='%s' tier=%s mode=%s",
+                self._agent, command, matched_tier, self._mode
+            )
+            return CommandResult(
+                command_id=command_id,
+                command=command,
+                agent=self._agent,
+                exit_code=-1,
+                stdout="",
+                stderr=f"DENIED: Current execution mode ({self._mode}) does not permit Tier {matched_tier} commands.",
+                duration_ms=0,
+                validated_by="mode_check_failed",
+                truncated=False,
+            )
+
+        # Pre-Execution Security Gate for Tier 2 and Tier 3
+        if not skip_gate and matched_tier and matched_tier >= 2:
+            logger.info("Triggering LLM Security Gate for Tier %d command", matched_tier)
+            gate_result = await review_command(
+                command=command,
+                domain=self._domain.value,
+                matched_tier=matched_tier,
+                original_query=original_query,
+                reasoning=reasoning,
+                adrs_context=adrs_context,
+            )
+            
+            if gate_result.decision == GateDecision.REJECTED:
+                logger.warning(
+                    "Command execution REJECTED by Security Gate | agent=%s cmd='%s' reason='%s'",
+                    self._agent, command, gate_result.reason
+                )
+                return CommandResult(
+                    command_id=command_id,
+                    command=command,
+                    agent=self._agent,
+                    exit_code=-1,
+                    stdout="",
+                    stderr=f"SECURITY GATE REJECTED: {gate_result.reason}",
+                    duration_ms=0,
+                    validated_by="security_gate_rejected",
+                    truncated=False,
+                )
+                
+            if gate_result.decision == GateDecision.REQUIRES_HITL:
+                logger.info(
+                    "Command execution REQUIRES HITL | agent=%s cmd='%s'",
+                    self._agent, command
+                )
+                return CommandResult(
+                    command_id=command_id,
+                    command=command,
+                    agent=self._agent,
+                    exit_code=-3, # Magic exit code for HITL needed
+                    stdout="",
+                    stderr=f"REQUIRES_HITL: {gate_result.reason}. Ask the user for approval.",
+                    duration_ms=0,
+                    validated_by="security_gate_hitl",
+                    truncated=False,
+                )
 
         # ── Stage 2: Execute ──────────────────────────────────
         logger.info(

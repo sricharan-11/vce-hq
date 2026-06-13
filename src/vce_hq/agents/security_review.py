@@ -175,6 +175,7 @@ def create_security_review_node(
 
         messages = [
             ("system", _SECURITY_REVIEW_PROMPT),
+            ("system", f"IMPORTANT: The agents operated in {settings.execution_mode}. Ensure their actions did not exceed this mode's capabilities."),
         ]
 
         if context:

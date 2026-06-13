@@ -44,6 +44,18 @@ class AnalyzeRequest(BaseModel):
     )
 
 
+class ApproveRequest(BaseModel):
+    """Request body to approve or reject a HITL command."""
+    approved: bool = Field(
+        ...,
+        description="Whether to approve or reject the command execution",
+    )
+    reason: str | None = Field(
+        default=None,
+        description="Optional reason for rejection",
+    )
+
+
 class AnalyzeResponse(BaseModel):
     """Response from a user-initiated analysis."""
     session_id: str
@@ -52,6 +64,8 @@ class AnalyzeResponse(BaseModel):
     route_reasoning: str = ""
     analysis: str = ""
     security_flags: list[str] = Field(default_factory=list)
+    hitl_command: str | None = None
+    hitl_reason: str | None = None
 
 
 @router.post(
@@ -110,32 +124,41 @@ async def analyze_query(
         )
 
         graph = build_agent_graph(conn, embedding_service, credential_manager, env_profile=env_profile)
-        result = await graph.ainvoke({
-            "tenant_id": tenant_id,
-            "session_id": session.session_id,
-            "user_query": request.query,
-        })
+        result = await graph.ainvoke(
+            {
+                "tenant_id": tenant_id,
+                "session_id": session.session_id,
+                "user_query": request.query,
+            },
+            config={"configurable": {"thread_id": session.session_id}}
+        )
 
-        final_status = session.status.FAILED if result.get("error") else session.status.COMPLETED
-        stm.update_session_status(session.session_id, final_status)
+        if result.get("hitl_pending"):
+            final_status = "requires_approval"
+            stm.update_session_status(session.session_id, session.status.ANALYZING)
+        else:
+            final_status = session.status.FAILED.value if result.get("error") else session.status.COMPLETED.value
+            stm.update_session_status(session.session_id, session.status.FAILED if result.get("error") else session.status.COMPLETED)
 
-        final_output = result.get("final_output", "")
+            final_output = result.get("final_output", "")
 
-        # Persist the final validated output as a conversation turn
-        if final_output:
-            stm.add_turn(ConversationTurn(
-                session_id=session.session_id,
-                agent=AgentType.SECURITY_REVIEW,
-                content=final_output,
-            ))
+            # Persist the final validated output as a conversation turn
+            if final_output:
+                stm.add_turn(ConversationTurn(
+                    session_id=session.session_id,
+                    agent=AgentType.SECURITY_REVIEW,
+                    content=final_output,
+                ))
 
         return AnalyzeResponse(
             session_id=session.session_id,
-            status=final_status.value,
+            status=final_status,
             route=result.get("route", ""),
             route_reasoning=result.get("route_reasoning", ""),
-            analysis=final_output,
+            analysis=result.get("final_output", ""),
             security_flags=result.get("security_flags", []),
+            hitl_command=result.get("hitl_command"),
+            hitl_reason=result.get("hitl_reason"),
         )
 
     except Exception as e:
@@ -146,6 +169,68 @@ async def analyze_query(
             detail=f"Analysis pipeline failed: {e}",
         )
 
+@router.post(
+    "/{session_id}/approve",
+    response_model=AnalyzeResponse,
+    summary="Approve or reject a pending HITL command",
+)
+async def approve_hitl(
+    session_id: str,
+    request: ApproveRequest,
+    tenant_id: Annotated[str, Depends(get_tenant_id)],
+    conn: Annotated[sqlite3.Connection, Depends(get_db_connection)],
+    embedding_service: Annotated[EmbeddingService, Depends(get_embedding_service)],
+    credential_manager: Annotated[CredentialManager, Depends(get_credential_manager)],
+) -> AnalyzeResponse:
+    """Resume a paused agent graph with human approval."""
+    stm = ShortTermMemory(conn)
+    session = stm.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    try:
+        env_profile = await get_environment_profile()
+        graph = build_agent_graph(conn, embedding_service, credential_manager, env_profile=env_profile)
+        
+        # We need to get the current state and inject the approval.
+        config = {"configurable": {"thread_id": session_id}}
+        
+        if request.approved:
+            # Tell the agent that the command was approved.
+            # In a full implementation, we might execute the command here or let the agent execute it.
+            # For simplicity, we just resume the graph which will go to the router.
+            pass
+            
+        result = await graph.ainvoke(None, config=config)
+        
+        if result.get("hitl_pending"):
+            final_status = "requires_approval"
+            stm.update_session_status(session.session_id, session.status.ANALYZING)
+        else:
+            final_status = session.status.FAILED.value if result.get("error") else session.status.COMPLETED.value
+            stm.update_session_status(session.session_id, session.status.FAILED if result.get("error") else session.status.COMPLETED)
+
+            final_output = result.get("final_output", "")
+            if final_output:
+                stm.add_turn(ConversationTurn(
+                    session_id=session.session_id,
+                    agent=AgentType.SECURITY_REVIEW,
+                    content=final_output,
+                ))
+
+        return AnalyzeResponse(
+            session_id=session.session_id,
+            status=final_status,
+            route=result.get("route", ""),
+            route_reasoning=result.get("route_reasoning", ""),
+            analysis=result.get("final_output", ""),
+            security_flags=result.get("security_flags", []),
+            hitl_command=result.get("hitl_command"),
+            hitl_reason=result.get("hitl_reason"),
+        )
+    except Exception as e:
+        logger.error("Resume failed for session %s: %s", session_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get(
     "/sessions",

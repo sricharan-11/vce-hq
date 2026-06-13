@@ -5,10 +5,17 @@ values (e.g., GOOGLE_API_KEY) will raise a clear error before any
 request is served.
 """
 
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class ExecutionMode(StrEnum):
+    MODE_1 = "mode_1"  # Read-only (default)
+    MODE_2 = "mode_2"  # Read + Edit/Update
+    MODE_3 = "mode_3"  # Full Access (Create/Delete)
 
 
 class Settings(BaseSettings):
@@ -31,6 +38,7 @@ class Settings(BaseSettings):
         cmd_max_stdout_bytes: Maximum stdout capture size.
         cmd_max_stderr_bytes: Maximum stderr capture size.
         cmd_enabled: Global kill switch for command execution.
+        execution_mode: The phased execution mode (1=read-only, 2=read+edit, 3=full).
     """
 
     model_config = SettingsConfigDict(
@@ -75,6 +83,7 @@ class Settings(BaseSettings):
     
     # Orchestration
     router_max_iterations: int = 3
+    execution_mode: ExecutionMode = ExecutionMode.MODE_1
 
     def tenant_db_path(self, tenant_id: str) -> Path:
         """Return the SQLite database path for a given tenant.

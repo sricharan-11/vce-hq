@@ -1,13 +1,12 @@
 """Command validator — allowlist/blocklist enforcement.
 
-Implements the three-stage validation flow from PRD_Brain_v1.0 §5.3:
-    1. Regex blocklist check (reject known-dangerous patterns)
-    2. Allowlist prefix check (only allow known-safe command prefixes)
+Implements the three-stage validation flow from PRD_Brain_v1.2:
+    1. Tiered Allowlist Classification (No LLM) -> Sets matched_tier
+    2. Regex blocklist check (reject known-dangerous patterns not allowed in ANY mode)
     3. Argument sanitization (reject shell injection vectors)
 
-Every command an agent formulates MUST pass all three stages before
-execution. Validation failures are logged with the rejection reason
-for audit and agent feedback.
+Every command an agent formulates MUST pass validation before execution.
+Validation failures are logged with the rejection reason.
 """
 
 from __future__ import annotations
@@ -19,12 +18,10 @@ from enum import StrEnum
 
 logger = logging.getLogger(__name__)
 
-
 class CommandDomain(StrEnum):
     """Identifies which agent domain a command belongs to."""
     OS = "os"
     CLOUD = "cloud"
-
 
 class ValidationStatus(StrEnum):
     """Result of command validation."""
@@ -32,7 +29,6 @@ class ValidationStatus(StrEnum):
     BLOCKED = "blocked_by_blocklist"
     NOT_ALLOWLISTED = "not_in_allowlist"
     SANITIZATION_FAILED = "sanitization_failed"
-
 
 @dataclass(frozen=True)
 class ValidationResult:
@@ -43,25 +39,24 @@ class ValidationResult:
         command: The original command string.
         domain: The domain the command was validated against.
         reason: Human-readable explanation (especially for rejections).
+        matched_tier: The tier (1, 2, or 3) that matched the command.
     """
     status: ValidationStatus
     command: str
     domain: CommandDomain
     reason: str
+    matched_tier: int | None = None  # 1, 2, or 3
 
     @property
     def approved(self) -> bool:
         """Whether the command passed validation."""
         return self.status == ValidationStatus.APPROVED
 
-
 # ══════════════════════════════════════════════════════════════
-# OS DOMAIN — Allowlists and Blocklists
+# OS DOMAIN
 # ══════════════════════════════════════════════════════════════
 
-# Allowlisted command prefixes for OS diagnostics (read-only).
-# The command must start with one of these prefixes.
-_OS_ALLOWLIST_PREFIXES: list[str] = [
+_OS_TIER_1: list[str] = [
     # System
     "uname", "uptime", "hostnamectl", "timedatectl", "hostname",
     # CPU
@@ -69,130 +64,62 @@ _OS_ALLOWLIST_PREFIXES: list[str] = [
     # Memory
     "free", "vmstat", "cat /proc/meminfo", "slabtop -o",
     # Disk
-    "df", "du -s", "du -sh", "lsblk", "blkid", "cat /proc/mounts",
-    "iostat", "findmnt", "stat ",
+    "df", "du -s", "du -sh", "lsblk", "blkid", "cat /proc/mounts", "iostat", "findmnt", "stat ",
     # Processes
     "ps ", "pstree", "cat /proc/", "ls /proc/",
     # Network
-    "ss ", "ip addr", "ip route", "ip link", "ip neigh",
-    "cat /etc/resolv.conf", "cat /etc/hosts",
-    "iptables -L", "iptables -S", "iptables -nvL",
-    "nft list", "netstat ",
+    "ss ", "ip addr", "ip route", "ip link", "ip neigh", "cat /etc/resolv.conf", "cat /etc/hosts",
+    "iptables -L", "iptables -S", "iptables -nvL", "nft list", "netstat ",
     # Logs
-    "journalctl ", "dmesg", "tail ", "head ", "cat /var/log/",
-    "zcat /var/log/", "less /var/log/", "grep ",
+    "journalctl ", "dmesg", "tail ", "head ", "cat /var/log/", "zcat /var/log/", "less /var/log/", "grep ",
     # Systemd
-    "systemctl status", "systemctl list-units", "systemctl show",
-    "systemctl is-active", "systemctl is-enabled", "systemctl is-failed",
+    "systemctl status", "systemctl list-units", "systemctl show", "systemctl is-active", "systemctl is-enabled", "systemctl is-failed",
     # Kernel
     "sysctl ", "lsmod", "modinfo",
     # Packages
-    "dpkg -l", "dpkg -s", "dpkg --list",
-    "apt list", "apt-cache", "apt show",
-    "rpm -q", "yum list", "yum info",
+    "dpkg -l", "dpkg -s", "dpkg --list", "apt list", "apt-cache", "apt show", "rpm -q", "yum list", "yum info",
     # Misc read-only
-    "whoami", "id", "w", "who", "last", "lastlog",
-    "date", "cal", "env", "printenv",
-    "lscpu", "lsmem", "lsns", "lsof",
-    "mount", "cat /etc/fstab",
-    "ulimit", "getconf",
-    # Remote VM access via gcloud SSH (inner command validated separately)
+    "whoami", "id", "w", "who", "last", "lastlog", "date", "cal", "env", "printenv", "lscpu", "lsmem", "lsns", "lsof", "mount", "cat /etc/fstab", "ulimit", "getconf",
+    # Remote VM access via gcloud SSH
     "gcloud compute ssh",
 ]
 
-# Regex patterns that ALWAYS block a command, regardless of allowlist.
+_OS_TIER_2: list[str] = [
+    "systemctl start", "systemctl stop", "systemctl restart", "systemctl enable", "systemctl disable", "systemctl daemon-reload",
+    "chmod ", "chown ", "chgrp ",
+]
+
+_OS_TIER_3: list[str] = [
+    "rm ", "rmdir ", "kill ", "killall ", "pkill ", "reboot", "shutdown", "poweroff",
+    "apt install", "apt remove", "apt-get install", "apt-get remove", "apt purge", "apt-get purge",
+    "yum install", "yum remove", "dnf install", "dnf remove",
+]
+
+# Patterns blocked in ALL modes (e.g. disk formatting, shell injection, interactive editors)
 _OS_BLOCKLIST_PATTERNS: list[re.Pattern[str]] = [
-    # Destructive file operations
-    re.compile(r"\brm\s", re.IGNORECASE),
-    re.compile(r"\brmdir\s", re.IGNORECASE),
-    re.compile(r"\bunlink\s", re.IGNORECASE),
-    re.compile(r"\bshred\s", re.IGNORECASE),
-    # Disk formatting / partitioning
     re.compile(r"\bmkfs\b", re.IGNORECASE),
     re.compile(r"\bfdisk\b", re.IGNORECASE),
     re.compile(r"\bparted\b", re.IGNORECASE),
     re.compile(r"\bdd\s", re.IGNORECASE),
-    # Process killing
-    re.compile(r"\bkill\s", re.IGNORECASE),
-    re.compile(r"\bkillall\s", re.IGNORECASE),
-    re.compile(r"\bpkill\s", re.IGNORECASE),
-    # System power
-    re.compile(r"\breboot\b", re.IGNORECASE),
-    re.compile(r"\bshutdown\b", re.IGNORECASE),
-    re.compile(r"\bpoweroff\b", re.IGNORECASE),
-    re.compile(r"\binit\s+[0-6]\b", re.IGNORECASE),
-    # Systemd write operations
-    re.compile(r"\bsystemctl\s+(start|stop|restart|enable|disable|mask|unmask|daemon-reload)\b"),
-    # Package management (write)
-    re.compile(r"\bapt\s+(install|remove|purge|upgrade|dist-upgrade|autoremove)\b"),
-    re.compile(r"\bapt-get\s+(install|remove|purge|upgrade)\b"),
-    re.compile(r"\byum\s+(install|remove|erase|update|upgrade)\b"),
-    re.compile(r"\bdnf\s+(install|remove|erase|update|upgrade)\b"),
-    re.compile(r"\bpip\s+install\b"),
-    re.compile(r"\bpip3\s+install\b"),
-    # Permission changes
-    re.compile(r"\bchmod\s"),
-    re.compile(r"\bchown\s"),
-    re.compile(r"\bchattr\s"),
-    re.compile(r"\bchgrp\s"),
-    # User management
-    re.compile(r"\buseradd\b"),
-    re.compile(r"\buserdel\b"),
-    re.compile(r"\busermod\b"),
-    re.compile(r"\bpasswd\b"),
-    re.compile(r"\bgroupadd\b"),
-    re.compile(r"\bgroupdel\b"),
-    # Firewall write operations
-    re.compile(r"\biptables\s+-(A|D|F|X|Z|P|I|R)\b"),
-    re.compile(r"\bnft\s+(add|delete|flush|insert)\b"),
-    # File writes
-    re.compile(r"\btee\s"),
-    re.compile(r"\bsed\s+-i\b"),
-    re.compile(r"\bawk\s+-i\s+inplace\b"),
-    # Outbound network
-    re.compile(r"\bcurl\s"),
-    re.compile(r"\bwget\s"),
-    re.compile(r"\b(nc|ncat|netcat)\s"),
-    # Editors (interactive / write)
     re.compile(r"\b(vi|vim|nano|emacs|ed)\s"),
-    # Cron / scheduling
-    re.compile(r"\bcrontab\s+-[er]\b"),
-    re.compile(r"\bat\s"),
 ]
 
-
 # ══════════════════════════════════════════════════════════════
-# CLOUD DOMAIN — Allowlists and Blocklists
+# CLOUD DOMAIN
 # ══════════════════════════════════════════════════════════════
 
-_CLOUD_ALLOWLIST_PREFIXES: list[str] = [
-    # ── AWS — read-only ───────────────────────────────────────
+_CLOUD_TIER_1: list[str] = [
     "aws ec2 describe-", "aws ec2 get-",
-    "aws iam get-", "aws iam list-", "aws iam simulate-",
-    "aws iam get-account-summary",
-    "aws elbv2 describe-",
-    "aws elb describe-",
+    "aws iam get-", "aws iam list-", "aws iam simulate-", "aws iam get-account-summary",
+    "aws elbv2 describe-", "aws elb describe-",
     "aws cloudwatch get-", "aws cloudwatch describe-", "aws cloudwatch list-",
-    "aws logs filter-log-events", "aws logs describe-log-groups",
-    "aws logs describe-log-streams", "aws logs get-log-events", "aws logs get-",
-    "aws ecs describe-", "aws ecs list-",
-    "aws eks describe-", "aws eks list-",
-    "aws rds describe-",
+    "aws logs filter-log-events", "aws logs describe-log-groups", "aws logs describe-log-streams", "aws logs get-log-events", "aws logs get-",
+    "aws ecs describe-", "aws ecs list-", "aws eks describe-", "aws eks list-", "aws rds describe-",
     "aws s3 ls", "aws s3api get-", "aws s3api list-", "aws s3api head-",
-    "aws sts get-caller-identity",
-    "aws lambda get-", "aws lambda list-",
-    "aws route53 list-", "aws route53 get-",
-    "aws sns list-", "aws sns get-",
-    "aws sqs list-", "aws sqs get-",
-    "aws sqs receive-message",
-    "aws autoscaling describe-",
-    "aws cloudformation describe-", "aws cloudformation list-",
-    "aws pricing get-", "aws ce get-",
-    "aws organizations describe-", "aws organizations list-",
-    "aws account get-",
-    "aws support describe-",
-    # ── GCP — read-only ───────────────────────────────────────
-    # Compute
+    "aws sts get-caller-identity", "aws lambda get-", "aws lambda list-", "aws route53 list-", "aws route53 get-",
+    "aws sns list-", "aws sns get-", "aws sqs list-", "aws sqs get-", "aws sqs receive-message",
+    "aws autoscaling describe-", "aws cloudformation describe-", "aws cloudformation list-",
+    "aws pricing get-", "aws ce get-", "aws organizations describe-", "aws organizations list-", "aws account get-", "aws support describe-",
     "gcloud compute instances list", "gcloud compute instances describe",
     "gcloud compute disks list", "gcloud compute disks describe",
     "gcloud compute firewall-rules list", "gcloud compute firewall-rules describe",
@@ -203,101 +130,59 @@ _CLOUD_ALLOWLIST_PREFIXES: list[str] = [
     "gcloud compute url-maps list", "gcloud compute url-maps describe",
     "gcloud compute addresses list", "gcloud compute addresses describe",
     "gcloud compute routers list", "gcloud compute routers describe",
-    "gcloud compute routes list",
-    "gcloud compute ssl-certificates list",
-    "gcloud compute target-https-proxies list",
-    "gcloud compute machine-types list",
-    "gcloud compute regions list", "gcloud compute zones list",
+    "gcloud compute routes list", "gcloud compute ssl-certificates list", "gcloud compute target-https-proxies list",
+    "gcloud compute machine-types list", "gcloud compute regions list", "gcloud compute zones list",
     "gcloud compute operations list", "gcloud compute operations describe",
-    # IAM
-    "gcloud projects get-iam-policy", "gcloud projects describe",
-    "gcloud projects list",
-    "gcloud iam roles list", "gcloud iam roles describe",
-    "gcloud iam service-accounts list", "gcloud iam service-accounts describe",
-    "gcloud iam service-accounts get-iam-policy",
-    "gcloud resource-manager folders list",
-    "gcloud organizations list",
-    # GKE / Kubernetes
-    "gcloud container clusters describe", "gcloud container clusters list",
-    "gcloud container node-pools list", "gcloud container node-pools describe",
-    # Cloud Run / App Engine
-    "gcloud run services list", "gcloud run services describe",
-    "gcloud run revisions list",
+    "gcloud projects get-iam-policy", "gcloud projects describe", "gcloud projects list",
+    "gcloud iam roles list", "gcloud iam roles describe", "gcloud iam service-accounts list", "gcloud iam service-accounts describe", "gcloud iam service-accounts get-iam-policy",
+    "gcloud resource-manager folders list", "gcloud organizations list",
+    "gcloud container clusters describe", "gcloud container clusters list", "gcloud container node-pools list", "gcloud container node-pools describe",
+    "gcloud run services list", "gcloud run services describe", "gcloud run revisions list",
     "gcloud app versions list", "gcloud app services list",
-    # Cloud Functions
     "gcloud functions list", "gcloud functions describe",
-    # Storage / SQL / Services
-    "gcloud sql instances describe", "gcloud sql instances list",
-    "gcloud sql databases list",
+    "gcloud sql instances describe", "gcloud sql instances list", "gcloud sql databases list",
     "gcloud storage ls", "gcloud storage buckets list",
     "gcloud services list", "gcloud services enable --dry-run",
-    # Monitoring / Logging
-    "gcloud logging read", "gcloud logging logs list",
-    "gcloud logging sinks list",
+    "gcloud logging read", "gcloud logging logs list", "gcloud logging sinks list",
     "gcloud monitoring dashboards list",
-    # DNS / Networking
     "gcloud dns managed-zones list", "gcloud dns record-sets list",
     "gcloud network-connectivity hubs list",
-    # Config / Meta
-    "gcloud config list", "gcloud config configurations list",
-    "gcloud info",
-    "gcloud auth list",
-    # ── Azure — read-only ─────────────────────────────────────
-    "az vm show", "az vm list",
-    "az vmss show", "az vmss list",
-    "az network nsg show", "az network nsg list",
-    "az network vnet show", "az network vnet list",
-    "az network lb show", "az network lb list",
-    "az network public-ip show", "az network public-ip list",
-    "az network nic show", "az network nic list",
-    "az network route-table show", "az network route-table list",
+    "gcloud config list", "gcloud config configurations list", "gcloud info", "gcloud auth list",
+    "az vm show", "az vm list", "az vmss show", "az vmss list",
+    "az network nsg show", "az network nsg list", "az network vnet show", "az network vnet list",
+    "az network lb show", "az network lb list", "az network public-ip show", "az network public-ip list",
+    "az network nic show", "az network nic list", "az network route-table show", "az network route-table list",
     "az network application-gateway show", "az network application-gateway list",
     "az network dns zone list", "az network dns record-set list",
-    "az role assignment list", "az role definition list",
-    "az ad sp show", "az ad sp list",
-    "az aks show", "az aks list",
-    "az container show", "az container list",
-    "az monitor metrics list", "az monitor log-analytics query",
-    "az monitor activity-log list",
-    "az storage account show", "az storage account list",
-    "az storage blob list", "az storage container list",
-    "az resource show", "az resource list",
-    "az account show", "az account list",
-    "az account subscription list",
-    "az group show", "az group list",
-    # ── Kubernetes — read-only ────────────────────────────────
-    "kubectl get ", "kubectl describe ",
-    "kubectl logs ", "kubectl log ",
-    "kubectl top ", "kubectl cluster-info",
-    "kubectl api-resources", "kubectl api-versions",
-    "kubectl config view", "kubectl config current-context",
-    "kubectl config get-contexts",
-    "kubectl version",
-    "kubectl explain ",
-    "kubectl rollout status",
-    "kubectl rollout history",
-    "kubectl auth can-i",
+    "az role assignment list", "az role definition list", "az ad sp show", "az ad sp list",
+    "az aks show", "az aks list", "az container show", "az container list",
+    "az monitor metrics list", "az monitor log-analytics query", "az monitor activity-log list",
+    "az storage account show", "az storage account list", "az storage blob list", "az storage container list",
+    "az resource show", "az resource list", "az account show", "az account list", "az account subscription list", "az group show", "az group list",
+    "kubectl get ", "kubectl describe ", "kubectl logs ", "kubectl log ", "kubectl top ", "kubectl cluster-info",
+    "kubectl api-resources", "kubectl api-versions", "kubectl config view", "kubectl config current-context", "kubectl config get-contexts",
+    "kubectl version", "kubectl explain ", "kubectl rollout status", "kubectl rollout history", "kubectl auth can-i",
+]
+
+_CLOUD_TIER_2: list[str] = [
+    "aws ec2 start-", "aws ec2 stop-", "aws ec2 modify-",
+    "gcloud compute instances start", "gcloud compute instances stop", "gcloud compute instances update",
+    "gcloud billing projects link",
+    "az vm start", "az vm stop", "az vm update",
+    "kubectl scale ", "kubectl rollout ", "kubectl set ", "kubectl apply ", "kubectl patch ", "kubectl edit ",
+]
+
+_CLOUD_TIER_3: list[str] = [
+    "aws ec2 terminate-", "aws ec2 create-", "aws ec2 delete-",
+    "gcloud compute instances create", "gcloud compute instances delete",
+    "gcloud billing projects unlink",
+    "az vm create", "az vm delete", "az vm deallocate",
+    "kubectl delete ", "kubectl create ",
 ]
 
 _CLOUD_BLOCKLIST_PATTERNS: list[re.Pattern[str]] = [
-    # AWS write operations
-    re.compile(r"\baws\s+\S+\s+(create|delete|update|modify|remove|put-|run-|"
-               r"start|stop|reboot|terminate|deregister|revoke|attach|detach|"
-               r"enable|disable|associate|disassociate)\b", re.IGNORECASE),
-    re.compile(r"\baws\s+s3\s+(cp|mv|rm|sync|mb|rb)\b", re.IGNORECASE),
-    re.compile(r"\baws\s+s3api\s+(put-|delete-|create-)\b", re.IGNORECASE),
-    # GCP write operations
-    re.compile(r"\bgcloud\s+\S+\s+\S+\s+(create|delete|update|reset|start|stop|"
-               r"set-|add-|remove-)\b", re.IGNORECASE),
-    # Azure write operations
-    re.compile(r"\baz\s+\S+\s+(create|delete|update|start|stop|restart|deallocate|"
-               r"set|assign|remove)\b", re.IGNORECASE),
-    # kubectl write operations
-    re.compile(r"\bkubectl\s+(apply|delete|edit|patch|scale|drain|cordon|uncordon|"
-               r"taint|label|annotate|rollout|set|replace|create|run|expose)\b",
-               re.IGNORECASE),
+    # Patterns blocked in ALL modes
 ]
-
 
 # ══════════════════════════════════════════════════════════════
 # SHARED — Shell Injection Sanitization
@@ -335,11 +220,11 @@ _SAFE_PIPE_TARGETS: list[str] = [
 # ══════════════════════════════════════════════════════════════
 
 def validate_command(command: str, domain: CommandDomain) -> ValidationResult:
-    """Validate a command against the allowlist/blocklist for a domain.
+    """Validate a command against the tiered allowlists/blocklist for a domain.
 
     Implements the three-stage flow:
-        1. Blocklist check (regex) → reject if any pattern matches
-        2. Allowlist check (prefix) → reject if no prefix matches
+        1. Tiered Allowlist Classification
+        2. Blocklist check (regex) → reject if any pattern matches
         3. Sanitization (injection detection) → reject if suspicious
 
     Args:
@@ -348,6 +233,7 @@ def validate_command(command: str, domain: CommandDomain) -> ValidationResult:
 
     Returns:
         A ``ValidationResult`` indicating approval or rejection with reason.
+        If approved, ``matched_tier`` is set to 1, 2, or 3.
     """
     command = command.strip()
 
@@ -361,13 +247,32 @@ def validate_command(command: str, domain: CommandDomain) -> ValidationResult:
 
     # Select domain-specific lists
     if domain == CommandDomain.OS:
+        tiers = {1: _OS_TIER_1, 2: _OS_TIER_2, 3: _OS_TIER_3}
         blocklist = _OS_BLOCKLIST_PATTERNS
-        allowlist = _OS_ALLOWLIST_PREFIXES
     else:
+        tiers = {1: _CLOUD_TIER_1, 2: _CLOUD_TIER_2, 3: _CLOUD_TIER_3}
         blocklist = _CLOUD_BLOCKLIST_PATTERNS
-        allowlist = _CLOUD_ALLOWLIST_PREFIXES
 
-    # ── Stage 1: Blocklist check ──────────────────────────────
+    # ── Stage 1: Tiered Allowlist Classification ───────────────────────
+    matched_tier = None
+    for tier_level, prefixes in tiers.items():
+        if any(command.startswith(prefix) for prefix in prefixes):
+            matched_tier = tier_level
+            break
+
+    if matched_tier is None:
+        logger.warning(
+            "Command REJECTED (allowlist) | domain=%s cmd='%s'",
+            domain.value, command,
+        )
+        return ValidationResult(
+            status=ValidationStatus.NOT_ALLOWLISTED,
+            command=command,
+            domain=domain,
+            reason=f"Command does not match any allowlisted prefix for {domain.value} domain (Tiers 1-3)",
+        )
+
+    # ── Stage 2: Blocklist check ──────────────────────────────
     for pattern in blocklist:
         if pattern.search(command):
             reason = f"Blocked by pattern: {pattern.pattern}"
@@ -380,20 +285,8 @@ def validate_command(command: str, domain: CommandDomain) -> ValidationResult:
                 command=command,
                 domain=domain,
                 reason=reason,
+                matched_tier=matched_tier,
             )
-
-    # ── Stage 2: Allowlist prefix check ───────────────────────
-    if not any(command.startswith(prefix) for prefix in allowlist):
-        logger.warning(
-            "Command REJECTED (allowlist) | domain=%s cmd='%s'",
-            domain.value, command,
-        )
-        return ValidationResult(
-            status=ValidationStatus.NOT_ALLOWLISTED,
-            command=command,
-            domain=domain,
-            reason=f"Command does not match any allowlisted prefix for {domain.value} domain",
-        )
 
     # ── Stage 3: SSH inner-command validation ──────────────────
     if domain == CommandDomain.OS and command.startswith("gcloud compute ssh"):
@@ -408,6 +301,7 @@ def validate_command(command: str, domain: CommandDomain) -> ValidationResult:
                 command=command,
                 domain=domain,
                 reason=ssh_issue,
+                matched_tier=matched_tier,
             )
 
     # ── Stage 4: Sanitization ─────────────────────────────────
@@ -422,18 +316,20 @@ def validate_command(command: str, domain: CommandDomain) -> ValidationResult:
             command=command,
             domain=domain,
             reason=sanitization_issue,
+            matched_tier=matched_tier,
         )
 
     # ── All stages passed ─────────────────────────────────────
     logger.info(
-        "Command APPROVED | domain=%s cmd='%s'",
-        domain.value, command,
+        "Command APPROVED | domain=%s tier=%d cmd='%s'",
+        domain.value, matched_tier, command,
     )
     return ValidationResult(
         status=ValidationStatus.APPROVED,
         command=command,
         domain=domain,
-        reason="Passed all validation stages",
+        reason=f"Passed validation for Tier {matched_tier}",
+        matched_tier=matched_tier,
     )
 
 
@@ -476,7 +372,7 @@ def _validate_ssh_inner_command(command: str) -> str | None:
     """Validate the inner command payload of a gcloud compute ssh command.
 
     Extracts the ``--command="..."`` argument and validates it against
-    the OS blocklist to prevent destructive remote execution.
+    the OS blocklist.
 
     Args:
         command: The full ``gcloud compute ssh ... --command="..."`` string.

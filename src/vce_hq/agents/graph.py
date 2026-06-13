@@ -13,6 +13,7 @@ agents into a single executable graph.
 import logging
 import sqlite3
 
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, StateGraph
 
 from vce_hq.agents.cloud_engineer import create_cloud_engineer_node
@@ -72,6 +73,13 @@ def build_agent_graph(
     graph.add_node("cloud_engineer", cloud_node)
     graph.add_node("finops_agent", finops_node)
     graph.add_node("security_review", security_node)
+    
+    async def human_approval_node(state: AgentState) -> AgentState:
+        # This node just acts as a breakpoint.
+        # Once approved and resumed, it clears the hitl_pending flag.
+        return {"hitl_pending": False}
+
+    graph.add_node("human_approval", human_approval_node)
 
     # Set entry point
     graph.set_entry_point("router")
@@ -89,19 +97,28 @@ def build_agent_graph(
         },
     )
 
-    # After OS Engineer: always return to Router for next steps
-    graph.add_edge("os_engineer", "router")
+    def _route_after_agent(state: AgentState) -> str:
+        if state.get("hitl_pending"):
+            return "human_approval"
+        return "router"
 
-    # After Cloud Engineer: always return to Router for next steps
-    graph.add_edge("cloud_engineer", "router")
+    # After Agents: check if HITL pending, otherwise back to router
+    graph.add_conditional_edges("os_engineer", _route_after_agent, {"human_approval": "human_approval", "router": "router"})
+    graph.add_conditional_edges("cloud_engineer", _route_after_agent, {"human_approval": "human_approval", "router": "router"})
+    graph.add_conditional_edges("finops_agent", _route_after_agent, {"human_approval": "human_approval", "router": "router"})
 
-    # After FinOps Agent: always return to Router for next steps
-    graph.add_edge("finops_agent", "router")
+    # After Human Approval: go back to the router so it can orchestrate next step
+    graph.add_edge("human_approval", "router")
 
     # After Security Review: end
     graph.add_edge("security_review", END)
 
-    return graph.compile()
+    checkpointer = SqliteSaver(conn)
+
+    return graph.compile(
+        checkpointer=checkpointer,
+        interrupt_before=["human_approval"]
+    )
 
 
 def _route_after_router(state: AgentState) -> str:

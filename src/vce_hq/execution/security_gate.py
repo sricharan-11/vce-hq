@@ -1,0 +1,106 @@
+"""Pre-Execution LLM Security Gate.
+
+Intercepts Tier 2 and Tier 3 commands before they execute.
+Reviews the command against tenant ADRs, original query, and blast radius.
+"""
+
+import json
+import logging
+from dataclasses import dataclass
+from enum import StrEnum
+
+import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
+
+from vce_hq.config import settings
+
+logger = logging.getLogger(__name__)
+
+class GateDecision(StrEnum):
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    REQUIRES_HITL = "requires_hitl"
+
+@dataclass(frozen=True)
+class SecurityGateResult:
+    decision: GateDecision
+    reason: str
+
+# Use the same model setup as the rest of the app
+genai.configure(api_key=settings.google_api_key)
+_model = genai.GenerativeModel(
+    model_name=settings.llm_model,
+    system_instruction=(
+        "You are the Pre-Execution Security Gate for an autonomous infrastructure agent. "
+        "Your job is to review commands BEFORE they are executed in the tenant's environment.\n\n"
+        "You will receive:\n"
+        "1. The Original User Request\n"
+        "2. The Tenant's Architecture Decision Records (ADRs) context\n"
+        "3. The Command the agent wants to run\n"
+        "4. The Agent's reasoning for running it\n"
+        "5. The Command Tier (2=Edit, 3=Destructive)\n\n"
+        "Rules:\n"
+        "- If the command violates a tenant ADR, REJECT it.\n"
+        "- If the command is generally unsafe or unrelated to the user request, REJECT it.\n"
+        "- If the command is Tier 3 (Destructive) and has a large blast radius (e.g., deleting a VM, dropping a database), it REQUIRES_HITL (Human in the loop).\n"
+        "- If the command is safe and aligned, APPROVE it.\n\n"
+        "Return JSON strictly in this schema:\n"
+        "{\n"
+        "  \"decision\": \"approved\" | \"rejected\" | \"requires_hitl\",\n"
+        "  \"reason\": \"Detailed explanation of why.\"\n"
+        "}"
+    ),
+)
+
+async def review_command(
+    command: str,
+    domain: str,
+    matched_tier: int,
+    original_query: str,
+    reasoning: str,
+    adrs_context: str = "",
+) -> SecurityGateResult:
+    """Evaluate a Tier 2/3 command using the LLM."""
+    prompt = f"""
+Please evaluate the following command.
+
+Command: `{command}`
+Domain: {domain}
+Tier: {matched_tier}
+
+Original User Request:
+{original_query}
+
+Agent Reasoning:
+{reasoning}
+
+Tenant ADR Context:
+{adrs_context if adrs_context else "No specific ADRs retrieved."}
+"""
+    try:
+        response = await _model.generate_content_async(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                response_mime_type="application/json",
+                temperature=0.0,
+            ),
+            safety_settings={
+                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            }
+        )
+        data = json.loads(response.text)
+        decision = GateDecision(data.get("decision", "rejected").lower())
+        return SecurityGateResult(
+            decision=decision,
+            reason=data.get("reason", "No reason provided")
+        )
+    except Exception as e:
+        logger.error("Security gate LLM call failed: %s", e)
+        # Fail safe
+        return SecurityGateResult(
+            decision=GateDecision.REJECTED,
+            reason=f"Security gate internal error: {e}"
+        )

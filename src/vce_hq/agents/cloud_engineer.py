@@ -170,8 +170,26 @@ def create_cloud_engineer_node(
             conn, embedding_service, query, top_k=5
         )
 
+        # ── Handle Resumed HITL Command ──────────────────────────────
+        if not state.get("hitl_pending") and state.get("hitl_command"):
+            logger.info("Cloud Engineer: Executing approved HITL command: %s", state["hitl_command"])
+            cmd_str = state["hitl_command"]
+            
+            available_credentials = credential_manager.list_credentials_with_plaintext()
+            with resolve_credentials(cmd_str, available_credentials) as env_overrides:
+                result = await executor.execute(
+                    cmd_str, env_overrides=env_overrides, reasoning="Approved via HITL", use_shell=True, skip_gate=True, original_query=query, adrs_context=context
+                )
+            
+            command_log.append(result.to_dict())
+            command_count += 1
+            
+            stm.log_command(CommandExecution(
+                session_id=session_id, agent=AgentType.CLOUD_ENGINEER, command=result.command, reasoning="Approved via HITL", exit_code=result.exit_code, stdout=result.stdout, stderr=result.stderr, duration_ms=result.duration_ms, validated_by=result.validated_by, truncated=result.truncated,
+            ))
+
         # ── Step 2-N: ReAct loop ──────────────────────────────
-        command_outputs: list[str] = []
+        command_outputs: list[str] = [_format_command_output_from_dict(c) for c in command_log]
         max_iterations = settings.cmd_max_iterations
         max_per_session = settings.cmd_max_per_session
 
@@ -214,6 +232,8 @@ def create_cloud_engineer_node(
                     "command_log": command_log,
                     "command_count": command_count,
                     "error": str(e),
+                    "hitl_command": "",
+                    "hitl_reason": "",
                 }
 
             action_request = _extract_json_action(response_text)
@@ -235,6 +255,8 @@ def create_cloud_engineer_node(
                     "current_agent": "cloud_engineer",
                     "command_log": command_log,
                     "command_count": command_count,
+                    "hitl_command": "",
+                    "hitl_reason": "",
                 }
 
             # ── Execute the requested command ─────────────────
@@ -280,7 +302,21 @@ def create_cloud_engineer_node(
                     env_overrides=env_overrides,
                     reasoning=command_request.get("reasoning", ""),
                     use_shell=True,  # Cloud CLIs require /bin/sh PATH
+                    original_query=query,
+                    adrs_context=context,
                 )
+
+            if getattr(result, "exit_code", None) == -3:
+                logger.info("Cloud Engineer pausing for HITL on command: %s", command_request["command"])
+                return {
+                    **state,
+                    "hitl_pending": True,
+                    "hitl_command": result.command,
+                    "hitl_reason": result.stderr,
+                    "current_agent": "cloud_engineer",
+                    "command_log": command_log,
+                    "command_count": command_count,
+                }
 
             command_log.append(result.to_dict())
             command_count += 1
@@ -350,6 +386,8 @@ def create_cloud_engineer_node(
             "current_agent": "cloud_engineer",
             "command_log": command_log,
             "command_count": command_count,
+            "hitl_command": "",
+            "hitl_reason": "",
         }
 
     return cloud_engineer_node
@@ -388,6 +426,7 @@ def _build_messages(
     """Build the LLM message list for a given ReAct iteration."""
     messages: list[tuple[str, str]] = [
         ("system", _CLOUD_SYSTEM_PROMPT),
+        ("system", f"IMPORTANT: You are currently operating in {settings.execution_mode}."),
     ]
 
     if env_context:
@@ -476,6 +515,24 @@ def _format_command_output(result: CommandResult) -> str:
     if result.stderr:
         parts.append(f"STDERR:\n{result.stderr}")
     if result.exit_code == -1:
+        parts.append("⚠️ Command was rejected by validation")
+
+    return "\n".join(parts)
+
+
+def _format_command_output_from_dict(c: dict) -> str:
+    """Format a command result from its dict representation."""
+    parts = [
+        f"Command: {c.get('command')}",
+        f"Exit Code: {c.get('exit_code')}",
+    ]
+    if c.get("truncated"):
+        parts.append("⚠️ Output was truncated due to size limits")
+    if c.get("stdout"):
+        parts.append(f"STDOUT:\n{c.get('stdout')}")
+    if c.get("stderr"):
+        parts.append(f"STDERR:\n{c.get('stderr')}")
+    if c.get("exit_code") == -1:
         parts.append("⚠️ Command was rejected by validation")
 
     return "\n".join(parts)
