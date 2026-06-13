@@ -5,6 +5,7 @@ for analysis by the agent swarm. Useful for proactive investigation
 and ad-hoc infrastructure questions.
 """
 
+import asyncio
 import logging
 import sqlite3
 from typing import Annotated
@@ -124,7 +125,8 @@ async def analyze_query(
         )
 
         graph = build_agent_graph(conn, embedding_service, credential_manager, env_profile=env_profile)
-        result = await graph.ainvoke(
+        result = await asyncio.to_thread(
+            graph.invoke,
             {
                 "tenant_id": tenant_id,
                 "session_id": session.session_id,
@@ -201,7 +203,7 @@ async def approve_hitl(
             # For simplicity, we just resume the graph which will go to the router.
             pass
             
-        result = await graph.ainvoke(None, config=config)
+        result = await asyncio.to_thread(graph.invoke, None, config=config)
         
         if result.get("hitl_pending"):
             final_status = "requires_approval"
