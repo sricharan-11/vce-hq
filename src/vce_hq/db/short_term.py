@@ -7,6 +7,7 @@ database connection.
 
 import json
 import sqlite3
+from typing import Any
 
 from vce_hq.db.models import (
     CommandExecution,
@@ -221,6 +222,46 @@ class ShortTermMemory:
             A newline-separated string of ``[AGENT]: content`` entries.
         """
         turns = self.get_conversation(session_id)
+        return "\n".join(
+            f"[{turn.agent.value.upper()}]: {turn.content}" for turn in turns
+        )
+
+    def get_recent_conversation_text(self, session_id: str, *, limit: int = 3) -> str:
+        """Get the most recent N conversation turns as a formatted text string.
+
+        Returns the last ``limit`` turns in chronological order. Used by the
+        Intent Analyzer for lightweight context (full history is too large).
+
+        Args:
+            session_id: The session whose conversation to format.
+            limit: Maximum number of most-recent turns to include.
+
+        Returns:
+            A newline-separated string of ``[AGENT]: content`` entries.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT * FROM conversation_turns
+            WHERE session_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (session_id, limit),
+        ).fetchall()
+
+        # Reverse to chronological order
+        rows = list(reversed(rows))
+
+        turns = [
+            ConversationTurn(
+                turn_id=row["turn_id"],
+                session_id=row["session_id"],
+                agent=row["agent"],
+                content=row["content"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
         return "\n".join(
             f"[{turn.agent.value.upper()}]: {turn.content}" for turn in turns
         )

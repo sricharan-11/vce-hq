@@ -113,7 +113,19 @@ def create_intent_analyzer_node(conn: sqlite3.Connection, embedding_service: Any
                     model_name=llm.model,
                 ))
 
-            content = response.content.strip()
+            content = response.content
+            if isinstance(content, list):
+                text_parts: list[str] = []
+                for block in content:
+                    if isinstance(block, dict) and "text" in block:
+                        text_parts.append(block["text"])
+                    elif isinstance(block, str):
+                        text_parts.append(block)
+                content = "".join(text_parts)
+            elif not isinstance(content, str):
+                content = str(content)
+
+            content = content.strip()
             if content.startswith("```json"):
                 content = content[7:]
             elif content.startswith("```"):

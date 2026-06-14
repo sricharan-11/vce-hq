@@ -13,7 +13,7 @@ agents into a single executable graph.
 import logging
 import sqlite3
 
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
 from vce_hq.agents.cloud_engineer import create_cloud_engineer_node
@@ -132,7 +132,9 @@ def build_agent_graph(
     graph.add_edge("security_review", END)
 
     if checkpointer is None:
-        checkpointer = SqliteSaver(conn)
+        # Safe default: in-memory checkpointer. Callers that need durable
+        # HITL persistence (e.g. the API) pass an AsyncSqliteSaver explicitly.
+        checkpointer = MemorySaver()
 
     return graph.compile(
         checkpointer=checkpointer,

@@ -5,18 +5,16 @@ consumption anomalies and optimize costs across all tenants, without
 any user interaction.
 """
 
-import asyncio
 import logging
-import os
-import sqlite3
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from langgraph.checkpoint.memory import MemorySaver
 
 from vce_hq.agents.graph import build_agent_graph
 from vce_hq.config import settings
 from vce_hq.db.connection import create_connection
-from vce_hq.db.models import AgentType, ConversationTurn, Session
+from vce_hq.db.models import AgentType, ConversationTurn, IncidentStatus, Session
 from vce_hq.db.short_term import ShortTermMemory
 from vce_hq.discovery.probe import get_environment_profile
 from vce_hq.embeddings.service import EmbeddingService
@@ -33,69 +31,78 @@ async def run_finops_analysis(job_type: str, query: str) -> None:
         query: The specific instruction for the FinOps agent.
     """
     logger.info("Scheduler: Starting %s FinOps analysis cycle across all tenants", job_type)
-    
+
     data_dir = Path(settings.data_dir)
     if not data_dir.exists():
         logger.warning("Scheduler: Data directory does not exist, skipping.")
         return
-        
-    # Discover tenants by looking at .db files (since isolation is per-db)
-    tenant_files = list(data_dir.glob("*.db"))
-    
-    for db_path in tenant_files:
-        tenant_id = db_path.stem
+
+    # Per-tenant DBs live at data_dir/<tenant_id>/vce.db (see settings.tenant_db_path).
+    tenant_db_paths = list(data_dir.glob("*/vce.db"))
+
+    for db_path in tenant_db_paths:
+        tenant_id = db_path.parent.name
         logger.info("Scheduler: Running automated %s FinOps report for tenant '%s'", job_type, tenant_id)
-        
+
+        conn = None
         try:
-            conn = create_connection(tenant_id)
+            conn = create_connection(db_path)
             stm = ShortTermMemory(conn)
-            
-            # Setup dependencies
-            embedding_service = EmbeddingService(conn)
-            credential_manager = CredentialManager(tenant_id, conn)
-            
-            # We don't cache the profile here; we want live discovery for the hourly report
+
+            # Setup dependencies (correct argument order/signatures)
+            embedding_service = EmbeddingService()
+            credential_manager = CredentialManager(conn, tenant_id)
+
+            # Live discovery for the scheduled report (no cache reuse)
             env_profile = await get_environment_profile()
-            
+
             # Create a synthetic session
             session = Session(tenant_id=tenant_id)
             stm.create_session(session)
-            stm.update_session_status(session.session_id, session.status.ANALYZING)
-            
+            stm.update_session_status(session.session_id, IncidentStatus.ANALYZING)
+
             # Persist synthetic user query
             stm.add_turn(ConversationTurn(
                 session_id=session.session_id,
                 agent=AgentType.ROUTER,
                 content=f"[SYSTEM SCHEDULED FINOPS {job_type} EVENT]: {query}",
             ))
-            
+
+            # Scheduled runs never need HITL persistence — in-memory checkpointer is sufficient.
             graph = build_agent_graph(
                 conn=conn,
                 embedding_service=embedding_service,
                 credential_manager=credential_manager,
                 env_profile=env_profile,
+                checkpointer=MemorySaver(),
             )
-            
+
             initial_state = {
                 "tenant_id": tenant_id,
                 "session_id": session.session_id,
                 "user_query": query,
             }
-            
-            # Execute graph
-            result = await graph.ainvoke(initial_state)
-            
-            if "error" in result:
+
+            result = await graph.ainvoke(
+                initial_state,
+                config={"configurable": {"thread_id": session.session_id}},
+            )
+
+            if result.get("error"):
                 logger.error("Scheduler: Graph execution failed for tenant '%s': %s", tenant_id, result["error"])
-                stm.update_session_status(session.session_id, session.status.FAILED)
+                stm.update_session_status(session.session_id, IncidentStatus.FAILED)
             else:
                 logger.info("Scheduler: Successfully generated FinOps report for tenant '%s'", tenant_id)
-                stm.update_session_status(session.session_id, session.status.COMPLETED)
-                
-            conn.close()
-            
+                stm.update_session_status(session.session_id, IncidentStatus.COMPLETED)
+
         except Exception as e:
             logger.error("Scheduler: Unexpected error running FinOps for tenant '%s': %s", tenant_id, e)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
 
 def start_scheduler() -> AsyncIOScheduler:
