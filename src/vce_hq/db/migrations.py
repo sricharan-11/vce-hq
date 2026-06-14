@@ -100,6 +100,15 @@ def _create_stm_tables(conn: sqlite3.Connection) -> None:
             ON token_usage(session_id);
     """)
 
+    # Conversation vectors — sqlite-vec virtual table for Semantic STM
+    conn.execute(f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS conversation_vectors
+        USING vec0(
+            turn_id TEXT PRIMARY KEY,
+            embedding float[{_DIMS}]
+        )
+    """)
+
 
 def _create_ltm_tables(conn: sqlite3.Connection) -> None:
     """Create long-term memory tables (metadata + vector indexes)."""

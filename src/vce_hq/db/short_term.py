@@ -164,6 +164,26 @@ class ShortTermMemory:
         self._conn.commit()
         return turn
 
+    async def embed_and_save_turn(self, turn: ConversationTurn, embedding_service: Any) -> None:
+        """Asynchronously embed a turn and store it in the vector index.
+
+        Args:
+            turn: The ConversationTurn that was already saved via add_turn.
+            embedding_service: An instance of EmbeddingService.
+        """
+        # Embed the turn content
+        embedding = await embedding_service.embed(f"[{turn.agent.value.upper()}]: {turn.content}")
+        
+        # Insert into conversation_vectors
+        self._conn.execute(
+            """
+            INSERT INTO conversation_vectors(turn_id, embedding)
+            VALUES (?, ?)
+            """,
+            (turn.turn_id, json.dumps(embedding)),
+        )
+        self._conn.commit()
+
     def get_conversation(self, session_id: str) -> list[ConversationTurn]:
         """Retrieve all conversation turns for a session, in chronological order.
 
@@ -201,6 +221,71 @@ class ShortTermMemory:
             A newline-separated string of ``[AGENT]: content`` entries.
         """
         turns = self.get_conversation(session_id)
+        return "\n".join(
+            f"[{turn.agent.value.upper()}]: {turn.content}" for turn in turns
+        )
+
+    def get_semantic_conversation_context(
+        self, session_id: str, query_embedding: list[float], limit: int = 3
+    ) -> str:
+        """Get semantically relevant past conversation turns using vector search.
+        
+        Retrieves the top-K most relevant turns, plus the 1 most recent turn 
+        (if not already included) to maintain immediate context flow.
+
+        Args:
+            session_id: The session whose conversation to search.
+            query_embedding: The vector embedding of the user's current query.
+            limit: Number of semantic turns to retrieve.
+
+        Returns:
+            A formatted string of conversation turns ordered chronologically.
+        """
+        # Fetch top K semantically similar turns
+        semantic_rows = self._conn.execute(
+            """
+            SELECT ct.*
+            FROM conversation_turns ct
+            JOIN conversation_vectors cv ON ct.turn_id = cv.turn_id
+            WHERE ct.session_id = ?
+            ORDER BY vec_distance_L2(cv.embedding, ?) ASC
+            LIMIT ?
+            """,
+            (session_id, json.dumps(query_embedding), limit),
+        ).fetchall()
+
+        # Fetch the absolute latest turn to ensure immediate context
+        latest_row = self._conn.execute(
+            """
+            SELECT * FROM conversation_turns 
+            WHERE session_id = ? 
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (session_id,),
+        ).fetchone()
+
+        # Combine, avoiding duplicates, and sort chronologically
+        turn_dict = {}
+        if latest_row:
+            turn_dict[latest_row["turn_id"]] = latest_row
+            
+        for row in semantic_rows:
+            turn_dict[row["turn_id"]] = row
+            
+        # Sort by created_at ascending
+        sorted_rows = sorted(turn_dict.values(), key=lambda r: r["created_at"])
+        
+        turns = [
+            ConversationTurn(
+                turn_id=row["turn_id"],
+                session_id=row["session_id"],
+                agent=row["agent"],
+                content=row["content"],
+                created_at=row["created_at"],
+            )
+            for row in sorted_rows
+        ]
+        
         return "\n".join(
             f"[{turn.agent.value.upper()}]: {turn.content}" for turn in turns
         )

@@ -104,11 +104,15 @@ async def analyze_query(
     stm.update_session_status(session.session_id, session.status.ANALYZING)
 
     # Persist user query as a conversation turn
-    stm.add_turn(ConversationTurn(
+    turn = ConversationTurn(
         session_id=session.session_id,
         agent=AgentType.ROUTER,  # User input enters via the router
         content=f"[USER QUERY]: {request.query}",
-    ))
+    )
+    stm.add_turn(turn)
+    
+    # Asynchronously embed the query for Semantic STM
+    await stm.embed_and_save_turn(turn, embedding_service)
 
     logger.info(
         "Analyzing query for tenant '%s' (session: %s): %.100s...",
@@ -151,11 +155,14 @@ async def analyze_query(
 
             # Persist the final validated output as a conversation turn
             if final_output:
-                stm.add_turn(ConversationTurn(
+                final_turn = ConversationTurn(
                     session_id=session.session_id,
                     agent=AgentType.SECURITY_REVIEW,
                     content=final_output,
-                ))
+                )
+                stm.add_turn(final_turn)
+                # Ensure the final output is embedded too so it can be retrieved later
+                await stm.embed_and_save_turn(final_turn, embedding_service)
 
         return AnalyzeResponse(
             session_id=session.session_id,
@@ -225,11 +232,13 @@ async def approve_hitl(
 
             final_output = result.get("final_output", "")
             if final_output:
-                stm.add_turn(ConversationTurn(
+                final_turn = ConversationTurn(
                     session_id=session.session_id,
                     agent=AgentType.SECURITY_REVIEW,
                     content=final_output,
-                ))
+                )
+                stm.add_turn(final_turn)
+                await stm.embed_and_save_turn(final_turn, embedding_service)
 
         return AnalyzeResponse(
             session_id=session.session_id,

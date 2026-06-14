@@ -59,6 +59,7 @@ def build_agent_graph(
         A compiled LangGraph ``StateGraph`` ready for invocation.
     """
     # Create node functions
+    intent_analyzer_node = create_intent_analyzer_node(conn, embedding_service, env_profile=env_profile)
     router_node = create_router_node(conn, env_profile=env_profile)
     os_node = create_os_engineer_node(conn, embedding_service, credential_manager, env_profile=env_profile)
     cloud_node = create_cloud_engineer_node(conn, embedding_service, credential_manager, env_profile=env_profile)
