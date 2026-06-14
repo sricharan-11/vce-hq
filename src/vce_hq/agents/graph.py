@@ -21,6 +21,7 @@ from vce_hq.agents.finops_agent import create_finops_agent_node
 from vce_hq.agents.os_engineer import create_os_engineer_node
 from vce_hq.agents.router import create_router_node
 from vce_hq.agents.security_review import create_security_review_node
+from vce_hq.agents.intent_analyzer import create_intent_analyzer_node
 from vce_hq.agents.state import AgentState
 from vce_hq.discovery.probe import EnvironmentProfile
 from vce_hq.embeddings.service import EmbeddingService
@@ -70,6 +71,7 @@ def build_agent_graph(
     graph = StateGraph(AgentState)
 
     # Add nodes
+    graph.add_node("intent_analyzer", intent_analyzer_node)
     graph.add_node("router", router_node)
     graph.add_node("os_engineer", os_node)
     graph.add_node("cloud_engineer", cloud_node)
@@ -84,7 +86,21 @@ def build_agent_graph(
     graph.add_node("human_approval", human_approval_node)
 
     # Set entry point
-    graph.set_entry_point("router")
+    graph.set_entry_point("intent_analyzer")
+
+    def _route_after_intent(state: AgentState) -> str:
+        if state.get("intent_status") == "IRRELEVANT":
+            return "security_review"
+        return "router"
+
+    graph.add_conditional_edges(
+        "intent_analyzer",
+        _route_after_intent,
+        {
+            "security_review": "security_review",
+            "router": "router"
+        }
+    )
 
     # Conditional routing after the Router node
     graph.add_conditional_edges(
