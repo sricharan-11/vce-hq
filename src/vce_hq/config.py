@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     google_api_key: str
 
     # LLM
-    llm_model: str = "gemini-2.0-flash"
+    llm_model: str = "gemini-3.1-pro"
 
     # Embeddings
     embedding_model: str = "text-embedding-005"
