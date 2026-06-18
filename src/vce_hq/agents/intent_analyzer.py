@@ -157,6 +157,14 @@ def create_intent_analyzer_node(conn: sqlite3.Connection, embedding_service: Any
             elif intent == "NEW_TOPIC":
                 # Clear context to avoid confusing the router with old issues
                 conversation_history = ""
+                # CRITICAL FIX: Clear old agent outputs from state
+                state["os_analysis"] = ""
+                state["cloud_analysis"] = ""
+                state["finops_analysis"] = ""
+                state["security_review"] = ""
+                state["final_output"] = ""
+                state["command_log"] = []
+                state["command_count"] = 0
             elif intent == "IRRELEVANT":
                 # Do not execute agents. Security review will output the clarifying question.
                 conversation_history = ""
@@ -165,6 +173,13 @@ def create_intent_analyzer_node(conn: sqlite3.Connection, embedding_service: Any
             else:
                 intent = "NEW_TOPIC"
                 conversation_history = ""
+                state["os_analysis"] = ""
+                state["cloud_analysis"] = ""
+                state["finops_analysis"] = ""
+                state["security_review"] = ""
+                state["final_output"] = ""
+                state["command_log"] = []
+                state["command_count"] = 0
 
             return {
                 **state,
