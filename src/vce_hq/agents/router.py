@@ -21,6 +21,7 @@ from vce_hq.config import settings
 from vce_hq.db.models import ConversationTurn, AgentType, TokenUsageRecord
 from vce_hq.db.short_term import ShortTermMemory
 from vce_hq.discovery.probe import EnvironmentProfile
+from vce_hq.execution.validator import get_allowlist_reference
 
 logger = logging.getLogger(__name__)
 
@@ -94,13 +95,32 @@ IMPORTANT: If a task requires OS-level data from remote VMs (ports, processes, d
 containers, services), you MUST delegate to the os_engineer — never expect the \
 cloud_engineer to SSH.
 
+## FALLBACK ROUTING — NEVER ACCEPT "NOT POSSIBLE"
+If an agent's output contains phrases like "not possible", "command rejected", \
+"VALIDATION FAILED", "not supported", "permission denied", "not in allowlist", \
+or "I cannot" — DO NOT finalize the response.
+
+Instead:
+1. Consult the AVAILABLE COMMANDS reference below.
+2. Find an alternative command prefix that could achieve the same goal.
+3. Re-delegate to the SAME agent (or a different one if the command belongs to another domain) \
+with an explicit instruction to use the specific alternative command.
+4. Only finalize (delegate to security_review) if there is truly NO alternative in the allowlist.
+
+Example: If finops_agent tried `gcloud billing info describe` and it was rejected, you \
+should see `gcloud billing accounts describe` in the available commands and re-delegate with: \
+"Use `gcloud billing accounts describe <ACCOUNT_ID>` to retrieve billing details."
+
+## AVAILABLE COMMANDS
+{allowlist_ref}
+
 You MUST respond with valid JSON only, no other text:
-{
+{{
   "theory": "Your current theory based on the evidence so far",
   "delegate_to": "os_engineer" | "cloud_engineer" | "finops_agent" | "security_review",
   "instruction": "Specific instructions for the delegated agent",
   "gaps": "What is still missing or incomplete (empty string if complete)"
-}
+}}
 """
 
 
@@ -120,6 +140,9 @@ def create_router_node(
     """
     # Build environment context string for prompt injection
     env_context = env_profile.to_prompt_context() if env_profile else ""
+
+    # Build the allowlist reference for fallback routing
+    allowlist_ref = get_allowlist_reference()
 
     llm = ChatGoogleGenerativeAI(
         model=settings.llm_model,
@@ -157,8 +180,11 @@ def create_router_node(
         iterations = state.get("router_iterations", 0) + 1
         max_iterations = settings.router_max_iterations
         
+        # Inject the dynamic allowlist reference into the prompt template
+        system_prompt = _ROUTER_SYSTEM_PROMPT.format(allowlist_ref=allowlist_ref)
+
         messages = [
-            ("system", _ROUTER_SYSTEM_PROMPT),
+            ("system", system_prompt),
         ]
         
         messages.append(

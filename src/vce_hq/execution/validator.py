@@ -217,6 +217,37 @@ _SAFE_PIPE_TARGETS: list[str] = [
     "cut", "tr", "column", "less", "more", "cat", "jq", "xargs echo",
 ]
 
+# ══════════════════════════════════════════════════════════════
+# ALLOWLIST REFERENCE (for Router prompt injection)
+# ══════════════════════════════════════════════════════════════
+
+def get_allowlist_reference() -> str:
+    """Build a formatted reference of all allowlisted command prefixes.
+
+    Used by the Supervisor Router to know exactly which commands are
+    available so it can suggest concrete alternatives when an agent
+    reports that something is "not possible".
+
+    Returns:
+        A multi-line string listing all tiers for OS and Cloud domains.
+    """
+    def _fmt(tier_name: str, prefixes: list[str]) -> str:
+        items = ", ".join(f"`{p.strip()}`" for p in prefixes)
+        return f"  {tier_name}: {items}"
+
+    sections = [
+        "## OS Domain",
+        _fmt("Tier 1 (Read-Only)", _OS_TIER_1),
+        _fmt("Tier 2 (Service Control)", _OS_TIER_2),
+        _fmt("Tier 3 (Destructive)", _OS_TIER_3),
+        "",
+        "## Cloud Domain",
+        _fmt("Tier 1 (Read/List/Describe)", _CLOUD_TIER_1),
+        _fmt("Tier 2 (Start/Stop/Update)", _CLOUD_TIER_2),
+        _fmt("Tier 3 (Create/Delete)", _CLOUD_TIER_3),
+    ]
+    return "\n".join(sections)
+
 
 # ══════════════════════════════════════════════════════════════
 # PUBLIC API
