@@ -178,6 +178,7 @@ def create_router_node(
         # specialist agent outputs are passed back directly in the graph state.
         conversation = state.get("conversation_history", "")
 
+        iterations = state.get("router_iterations", 0) + 1
         max_iterations = settings.router_max_iterations
         
         # Inject the dynamic allowlist reference into the prompt template
