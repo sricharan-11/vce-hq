@@ -141,7 +141,14 @@ def create_intent_analyzer_node(conn: sqlite3.Connection, embedding_service: Any
             
             logger.info("Intent Analyzer classified query as %s: %s", intent, reasoning)
 
-            conversation_history = ""
+            # CRITICAL FIX: Unconditionally clear transient agent outputs from the previous turn
+            # so they don't bleed into the current turn's security_review, regardless of intent.
+            state["os_analysis"] = ""
+            state["cloud_analysis"] = ""
+            state["finops_analysis"] = ""
+            state["security_review"] = ""
+            state["final_output"] = ""
+            
             if intent == "CONTINUATION":
                 # Smart Context: Use RAG to fetch semantically relevant older turns
                 try:
@@ -157,12 +164,6 @@ def create_intent_analyzer_node(conn: sqlite3.Connection, embedding_service: Any
             elif intent == "NEW_TOPIC":
                 # Clear context to avoid confusing the router with old issues
                 conversation_history = ""
-                # CRITICAL FIX: Clear old agent outputs from state
-                state["os_analysis"] = ""
-                state["cloud_analysis"] = ""
-                state["finops_analysis"] = ""
-                state["security_review"] = ""
-                state["final_output"] = ""
                 state["command_log"] = []
                 state["command_count"] = 0
             elif intent == "IRRELEVANT":
@@ -173,11 +174,6 @@ def create_intent_analyzer_node(conn: sqlite3.Connection, embedding_service: Any
             else:
                 intent = "NEW_TOPIC"
                 conversation_history = ""
-                state["os_analysis"] = ""
-                state["cloud_analysis"] = ""
-                state["finops_analysis"] = ""
-                state["security_review"] = ""
-                state["final_output"] = ""
                 state["command_log"] = []
                 state["command_count"] = 0
 
