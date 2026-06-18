@@ -171,13 +171,19 @@ def create_router_node(
         else:
             return {**state, "error": "No event or user query provided to Router"}
 
-        # Include conversation history for context continuity
-        conversation = ""
-        if state.get("session_id"):
-            conversation = stm.get_conversation_text(state["session_id"])
-
-        # Iteration tracking
+        # Include conversation history for context continuity.
+        # On the FIRST iteration, use the conversation_history set by the
+        # Intent Analyzer (which may be empty for NEW_TOPIC to prevent
+        # old context from bleeding in). On subsequent iterations, fetch
+        # from STM so the Router can see the latest agent outputs.
         iterations = state.get("router_iterations", 0) + 1
+        if iterations <= 1:
+            # Trust the Intent Analyzer's context decision
+            conversation = state.get("conversation_history", "")
+        else:
+            # Re-fetch so the Router sees the latest agent outputs
+            conversation = stm.get_conversation_text(state["session_id"]) if state.get("session_id") else ""
+
         max_iterations = settings.router_max_iterations
         
         # Inject the dynamic allowlist reference into the prompt template
