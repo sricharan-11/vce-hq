@@ -91,6 +91,10 @@ This gives real evidence of what each VM is doing — not guesses.
 - Step 1 → cloud_engineer: Check firewall rules, load balancers, network config.
 - Step 2 → os_engineer: SSH into the affected VM and check CPU, memory, disk, logs, processes.
 
+### "Cloud monitoring check / Used services over time":
+- Step 1 → cloud_engineer: Use `gcloud logging read` or `gcloud monitoring` commands to check API activity or resource usage.
+- IMPORTANT DISAMBIGUATION: Do NOT route to the finops_agent or use billing/BigQuery commands for "used services" unless the user EXPLICITLY asks about cost, spending, or billing. "Used services" means API activity, not financial cost.
+
 IMPORTANT: If a task requires OS-level data from remote VMs (ports, processes, disk, logs, \
 containers, services), you MUST delegate to the os_engineer — never expect the \
 cloud_engineer to SSH.
