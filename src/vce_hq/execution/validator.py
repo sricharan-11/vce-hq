@@ -235,6 +235,13 @@ def get_allowlist_reference() -> str:
         items = ", ".join(f"`{p.strip()}`" for p in prefixes)
         return f"  {tier_name}: {items}"
 
+    # FinOps-specific command prefixes (subset of Cloud tiers used by finops_agent)
+    _FINOPS_TIER_1 = [p for p in _CLOUD_TIER_1 if any(
+        kw in p for kw in ("pricing", "ce ", "billing", "consumption")
+    )]
+    _FINOPS_TIER_2 = [p for p in _CLOUD_TIER_2 if "billing" in p]
+    _FINOPS_TIER_3 = [p for p in _CLOUD_TIER_3 if "billing" in p]
+
     sections = [
         "## OS Domain",
         _fmt("Tier 1 (Read-Only)", _OS_TIER_1),
@@ -245,6 +252,11 @@ def get_allowlist_reference() -> str:
         _fmt("Tier 1 (Read/List/Describe)", _CLOUD_TIER_1),
         _fmt("Tier 2 (Start/Stop/Update)", _CLOUD_TIER_2),
         _fmt("Tier 3 (Create/Delete)", _CLOUD_TIER_3),
+        "",
+        "## FinOps Domain (billing, pricing, consumption)",
+        _fmt("Tier 1 (Read-Only)", _FINOPS_TIER_1),
+        _fmt("Tier 2 (Billing Links)", _FINOPS_TIER_2),
+        _fmt("Tier 3 (Billing Unlinks)", _FINOPS_TIER_3),
     ]
     return "\n".join(sections)
 
