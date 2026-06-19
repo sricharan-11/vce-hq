@@ -18,6 +18,54 @@ from enum import StrEnum
 
 logger = logging.getLogger(__name__)
 
+# Horizontal API Translation Mapping
+# We map REST endpoints/actions to Tiers to evaluate raw scripts (python/curl) without LLM overhead.
+# Since AWS actions are in headers/payloads (not URLs), we map standard Action names too.
+
+_API_ALLOWLIST = {
+    1: [
+        # GCP (Read Only endpoints or base domains assuming GET method)
+        re.compile(r"https://(compute|logging|monitoring|cloudbilling|cloudresourcemanager|iam|container|run|appengine|cloudfunctions|sqladmin|storage|serviceusage|dns|networkconnectivity)\.googleapis\.com/.*", re.IGNORECASE),
+        
+        # AWS (Action headers for describing/listing)
+        re.compile(r"(Describe|List|Get|Simulate|FilterLogEvents)[A-Za-z]+", re.IGNORECASE),
+        
+        # Azure (Read Only ARM endpoints)
+        re.compile(r"https://management\.azure\.com/subscriptions/.*", re.IGNORECASE),
+    ],
+    2: [
+        # GCP (Start/Stop/Update)
+        re.compile(r"https://compute\.googleapis\.com/compute/v1/projects/[^/]+/zones/[^/]+/instances/[^/]+/(start|stop|setLabels)", re.IGNORECASE),
+        re.compile(r"https://cloudbilling\.googleapis\.com/v1/projects/[^/]+/billingInfo", re.IGNORECASE),
+        
+        # AWS (State transitions)
+        re.compile(r"(Start|Stop|Modify)[A-Za-z]+", re.IGNORECASE),
+        
+        # Azure (Start/Stop)
+        re.compile(r"https://management\.azure\.com/subscriptions/.*/(start|stop|restart|deallocate)", re.IGNORECASE),
+    ],
+    3: [
+        # GCP (Destructive)
+        re.compile(r"https://compute\.googleapis\.com/compute/v1/projects/[^/]+/zones/[^/]+/instances/[^/]+$", re.IGNORECASE), # DELETE
+        
+        # AWS (Destructive)
+        re.compile(r"(Terminate|Delete|Create)[A-Za-z]+", re.IGNORECASE),
+        
+        # Azure (Destructive)
+        re.compile(r"https://management\.azure\.com/subscriptions/.*/delete", re.IGNORECASE),
+    ]
+}
+
+def _detect_destructive_methods(command: str) -> bool:
+    """Detect if a raw script contains destructive HTTP methods or actions."""
+    destructive_keywords = [
+        r'requests\.delete', r'requests\.post', r'requests\.put', r'requests\.patch',
+        r'method=[\'"]DELETE[\'"]', r'method=[\'"]POST[\'"]', r'method=[\'"]PUT[\'"]',
+        r'-X\s*DELETE', r'-X\s*POST', r'-X\s*PUT', r'-X\s*PATCH'
+    ]
+    return any(re.search(pattern, command, re.IGNORECASE) for pattern in destructive_keywords)
+
+
 class CommandDomain(StrEnum):
     """Identifies which agent domain a command belongs to."""
     OS = "os"
@@ -305,6 +353,43 @@ def validate_command(command: str, domain: CommandDomain) -> ValidationResult:
         if any(command.startswith(prefix) for prefix in prefixes):
             matched_tier = tier_level
             break
+
+    # ── Stage 2.5: Horizontal API Translation ────────────────────────
+    # If the command did not match a CLI prefix but appears to be a raw script
+    if matched_tier is None and (command.startswith("python") or command.startswith("curl")):
+        endpoints = re.findall(r'https?://[^\s\'"]+', command)
+        
+        # AWS actions are usually strings in payloads or headers, not URLs.
+        aws_actions = re.findall(r'(Describe|List|Get|Simulate|FilterLogEvents|Start|Stop|Modify|Terminate|Delete|Create)[A-Za-z]+', command, re.IGNORECASE)
+        
+        combined_targets = endpoints + aws_actions
+        
+        if combined_targets:
+            highest_tier_required = 1
+            all_targets_allowed = True
+            has_destructive_methods = _detect_destructive_methods(command)
+            
+            for target in combined_targets:
+                target_allowed = False
+                for tier_level, patterns in _API_ALLOWLIST.items():
+                    if any(pattern.match(target) for pattern in patterns):
+                        target_allowed = True
+                        
+                        # If it's a destructive HTTP method, we automatically escalate Tier 1 (Read-Only) URLs to Tier 3 (Destructive)
+                        if has_destructive_methods and tier_level == 1:
+                            highest_tier_required = max(highest_tier_required, 3)
+                        else:
+                            highest_tier_required = max(highest_tier_required, tier_level)
+                        break
+                
+                if not target_allowed:
+                    logger.warning("Horizontal API Translation failed: target not allowed: '%s'", target)
+                    all_targets_allowed = False
+                    break
+            
+            if all_targets_allowed:
+                matched_tier = highest_tier_required
+                logger.info("Horizontal API Translation successful. Translated script to Tier %d based on targets: %s", matched_tier, combined_targets)
 
     if matched_tier is None:
         logger.warning(
