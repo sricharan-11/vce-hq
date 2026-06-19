@@ -30,3 +30,4 @@ data/
 # OS
 .DS_Store
 Thumbs.dbserver.log
+server.log
