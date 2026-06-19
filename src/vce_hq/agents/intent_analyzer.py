@@ -101,7 +101,7 @@ def create_intent_analyzer_node(conn: sqlite3.Connection, embedding_service: Any
                 input_details = usage.get("input_token_details") or {}
                 output_details = usage.get("output_token_details") or {}
                 stm.log_token_usage(TokenUsageRecord(
-                    session_id=session_id,
+                    session_id=session_id, request_id=state.get("request_id"),
                     tenant_id=state.get("tenant_id", ""),
                     agent=AgentType.ROUTER, # Log under router for simplicity
                     prompt_tokens=usage.get("input_tokens", 0),

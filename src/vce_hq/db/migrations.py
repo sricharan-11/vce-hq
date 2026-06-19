@@ -32,7 +32,25 @@ def run_migrations(conn: sqlite3.Connection) -> None:
     _create_stm_tables(conn)
     _create_ltm_tables(conn)
     _create_vault_tables(conn)
+    
+    # Retroactive migrations for v1.x -> v1.y
+    _retroactive_migrations(conn)
+    
     conn.commit()
+
+
+def _retroactive_migrations(conn: sqlite3.Connection) -> None:
+    """Safely apply ALTER TABLE patches to existing DBs."""
+    def add_col(table: str, col: str, col_type: str) -> None:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+                
+    add_col("conversation_turns", "request_id", "TEXT")
+    add_col("command_executions", "request_id", "TEXT")
+    add_col("token_usage", "request_id", "TEXT")
 
 
 def _create_stm_tables(conn: sqlite3.Connection) -> None:
@@ -55,6 +73,7 @@ def _create_stm_tables(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS conversation_turns (
             turn_id      TEXT PRIMARY KEY,
             session_id   TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+            request_id   TEXT,
             agent        TEXT NOT NULL,
             content      TEXT NOT NULL,
             created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
@@ -66,6 +85,7 @@ def _create_stm_tables(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS command_executions (
             command_id       TEXT PRIMARY KEY,
             session_id       TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+            request_id       TEXT,
             agent            TEXT NOT NULL,
             command          TEXT NOT NULL,
             reasoning        TEXT NOT NULL,
@@ -84,6 +104,7 @@ def _create_stm_tables(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS token_usage (
             usage_id         TEXT PRIMARY KEY,
             session_id       TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+            request_id       TEXT,
             tenant_id        TEXT NOT NULL,
             agent            TEXT NOT NULL,
             prompt_tokens    INTEGER NOT NULL,

@@ -185,7 +185,7 @@ def create_cloud_engineer_node(
             command_count += 1
             
             stm.log_command(CommandExecution(
-                session_id=session_id, agent=AgentType.CLOUD_ENGINEER, command=result.command, reasoning="Approved via HITL", exit_code=result.exit_code, stdout=result.stdout, stderr=result.stderr, duration_ms=result.duration_ms, validated_by=result.validated_by, truncated=result.truncated,
+                session_id=session_id, request_id=state.get("request_id"), agent=AgentType.CLOUD_ENGINEER, command=result.command, reasoning="Approved via HITL", exit_code=result.exit_code, stdout=result.stdout, stderr=result.stderr, duration_ms=result.duration_ms, validated_by=result.validated_by, truncated=result.truncated,
             ))
 
         # ── Step 2-N: ReAct loop ──────────────────────────────
@@ -210,7 +210,7 @@ def create_cloud_engineer_node(
                     input_details = usage.get("input_token_details") or {}
                     output_details = usage.get("output_token_details") or {}
                     stm.log_token_usage(TokenUsageRecord(
-                        session_id=session_id,
+                        session_id=session_id, request_id=state.get("request_id"),
                         tenant_id=state.get("tenant_id", ""),
                         agent=AgentType.CLOUD_ENGINEER,
                         prompt_tokens=usage.get("input_tokens", 0),
@@ -245,7 +245,7 @@ def create_cloud_engineer_node(
                 )
                 # Persist the agent's analysis turn to STM
                 stm.add_turn(ConversationTurn(
-                    session_id=session_id,
+                    session_id=session_id, request_id=state.get("request_id"),
                     agent=AgentType.CLOUD_ENGINEER,
                     content=response_text,
                 ))
@@ -323,7 +323,7 @@ def create_cloud_engineer_node(
 
             # Persist command execution to STM audit trail
             stm.log_command(CommandExecution(
-                session_id=session_id,
+                session_id=session_id, request_id=state.get("request_id"),
                 agent=AgentType.CLOUD_ENGINEER,
                 command=result.command,
                 reasoning=command_request.get("reasoning", ""),
@@ -362,7 +362,7 @@ def create_cloud_engineer_node(
                 input_details = usage.get("input_token_details") or {}
                 output_details = usage.get("output_token_details") or {}
                 stm.log_token_usage(TokenUsageRecord(
-                    session_id=session_id,
+                    session_id=session_id, request_id=state.get("request_id"),
                     tenant_id=state.get("tenant_id", ""),
                     agent=AgentType.CLOUD_ENGINEER,
                     prompt_tokens=usage.get("input_tokens", 0),

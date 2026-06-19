@@ -151,12 +151,13 @@ class ShortTermMemory:
         """
         self._conn.execute(
             """
-            INSERT INTO conversation_turns (turn_id, session_id, agent, content, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO conversation_turns (turn_id, session_id, request_id, agent, content, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 turn.turn_id,
                 turn.session_id,
+                turn.request_id,
                 turn.agent.value,
                 turn.content,
                 turn.created_at.isoformat(),
@@ -347,15 +348,16 @@ class ShortTermMemory:
         """
         self._conn.execute(
             """
-            INSERT INTO command_executions
-                (command_id, session_id, agent, command, reasoning,
-                 exit_code, stdout, stderr, duration_ms, validated_by,
-                 truncated, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO command_executions (
+                command_id, session_id, request_id, agent, command, reasoning,
+                exit_code, stdout, stderr, duration_ms,
+                validated_by, truncated, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 execution.command_id,
                 execution.session_id,
+                execution.request_id,
                 execution.agent.value,
                 execution.command,
                 execution.reasoning,
@@ -364,7 +366,7 @@ class ShortTermMemory:
                 execution.stderr,
                 execution.duration_ms,
                 execution.validated_by,
-                1 if execution.truncated else 0,
+                int(execution.truncated),
                 execution.created_at.isoformat(),
             ),
         )
@@ -389,16 +391,17 @@ class ShortTermMemory:
             CommandExecution(
                 command_id=row["command_id"],
                 session_id=row["session_id"],
-                agent=row["agent"],
+                request_id=row["request_id"],
+                agent=AgentType(row["agent"]),
                 command=row["command"],
                 reasoning=row["reasoning"],
                 exit_code=row["exit_code"],
                 stdout=row["stdout"] or "",
                 stderr=row["stderr"] or "",
-                duration_ms=row["duration_ms"] or 0,
+                duration_ms=row["duration_ms"],
                 validated_by=row["validated_by"],
                 truncated=bool(row["truncated"]),
-                created_at=row["created_at"],
+                created_at=datetime.fromisoformat(row["created_at"]),
             )
             for row in rows
         ]

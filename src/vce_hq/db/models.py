@@ -100,6 +100,7 @@ class ConversationTurn(BaseModel):
     """
     turn_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     session_id: str
+    request_id: str | None = None
     agent: AgentType
     content: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -114,6 +115,7 @@ class CommandExecution(BaseModel):
     """
     command_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     session_id: str
+    request_id: str | None = None
     agent: AgentType
     command: str
     reasoning: str  # Why the agent chose to run this command
@@ -133,6 +135,7 @@ class TokenUsageRecord(BaseModel):
     """
     usage_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     session_id: str
+    request_id: str | None = None
     tenant_id: str
     agent: AgentType
     prompt_tokens: int

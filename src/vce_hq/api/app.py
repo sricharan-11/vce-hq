@@ -12,7 +12,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from vce_hq.api.middleware import RequestLoggingMiddleware
-from vce_hq.api.routes import analyze, credentials, health, knowledge, webhooks, finops
+from vce_hq.api.routes import analyze, credentials, health, knowledge, webhooks, finops, trace
 from vce_hq.api.scheduler import start_scheduler
 from vce_hq.config import settings
 
@@ -60,6 +60,7 @@ def create_app() -> FastAPI:
     app.include_router(knowledge.router)
     app.include_router(credentials.router)
     app.include_router(finops.router)
+    app.include_router(trace.router)
 
     # ── Frontend ──────────────────────────────────────────────
     @app.get("/", include_in_schema=False)

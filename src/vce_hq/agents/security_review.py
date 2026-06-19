@@ -208,6 +208,7 @@ def create_security_review_node(
                 output_details = usage.get("output_token_details") or {}
                 stm.log_token_usage(TokenUsageRecord(
                     session_id=state.get("session_id", ""),
+                    request_id=state.get("request_id"),
                     tenant_id=state.get("tenant_id", ""),
                     agent=AgentType.SECURITY_REVIEW,
                     prompt_tokens=usage.get("input_tokens", 0),

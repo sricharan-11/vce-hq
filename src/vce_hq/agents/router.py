@@ -264,6 +264,7 @@ def create_router_node(
             # Log the router's decision to STM
             stm.add_turn(ConversationTurn(
                 session_id=state.get("session_id", ""),
+                request_id=state.get("request_id"),
                 agent=AgentType.ROUTER,
                 content=f"[ROUTER THEORY]: {theory}\n[DELEGATED TO {target.upper()}]: {instruction}",
             ))

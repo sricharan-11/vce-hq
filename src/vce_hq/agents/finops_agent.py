@@ -163,7 +163,7 @@ def create_finops_agent_node(
             command_count += 1
             
             stm.log_command(CommandExecution(
-                session_id=session_id, agent=AgentType.FINOPS_AGENT, command=result.command, reasoning="Approved via HITL", exit_code=result.exit_code, stdout=result.stdout, stderr=result.stderr, duration_ms=result.duration_ms, validated_by=result.validated_by, truncated=result.truncated,
+                session_id=session_id, request_id=state.get("request_id"), agent=AgentType.FINOPS_AGENT, command=result.command, reasoning="Approved via HITL", exit_code=result.exit_code, stdout=result.stdout, stderr=result.stderr, duration_ms=result.duration_ms, validated_by=result.validated_by, truncated=result.truncated,
             ))
 
         # ── Step 2-N: ReAct loop ──────────────────────────────
@@ -188,7 +188,7 @@ def create_finops_agent_node(
                     input_details = usage.get("input_token_details") or {}
                     output_details = usage.get("output_token_details") or {}
                     stm.log_token_usage(TokenUsageRecord(
-                        session_id=session_id,
+                        session_id=session_id, request_id=state.get("request_id"),
                         tenant_id=state.get("tenant_id", ""),
                         agent=AgentType.FINOPS_AGENT,
                         prompt_tokens=usage.get("input_tokens", 0),
@@ -222,7 +222,7 @@ def create_finops_agent_node(
                     iteration,
                 )
                 stm.add_turn(ConversationTurn(
-                    session_id=session_id,
+                    session_id=session_id, request_id=state.get("request_id"),
                     agent=AgentType.FINOPS_AGENT,
                     content=response_text,
                 ))
@@ -279,7 +279,7 @@ def create_finops_agent_node(
             command_count += 1
 
             stm.log_command(CommandExecution(
-                session_id=session_id,
+                session_id=session_id, request_id=state.get("request_id"),
                 agent=AgentType.FINOPS_AGENT,
                 command=result.command,
                 reasoning=command_request.get("reasoning", ""),
@@ -313,7 +313,7 @@ def create_finops_agent_node(
                 input_details = usage.get("input_token_details") or {}
                 output_details = usage.get("output_token_details") or {}
                 stm.log_token_usage(TokenUsageRecord(
-                    session_id=session_id,
+                    session_id=session_id, request_id=state.get("request_id"),
                     tenant_id=state.get("tenant_id", ""),
                     agent=AgentType.FINOPS_AGENT,
                     prompt_tokens=usage.get("input_tokens", 0),

@@ -55,6 +55,7 @@ class AgentState(TypedDict, total=False):
     # Identity
     tenant_id: str
     session_id: str
+    request_id: str
 
     # Input (one of these will be populated)
     event: dict[str, Any]

@@ -8,7 +8,8 @@ and ad-hoc infrastructure questions.
 import asyncio
 import logging
 import sqlite3
-from typing import Annotated
+import uuid
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -102,10 +103,14 @@ async def analyze_query(
         stm.create_session(session)
 
     stm.update_session_status(session.session_id, session.status.ANALYZING)
+    
+    # Generate unique request_id for this turn
+    request_id = str(uuid.uuid4())
 
     # Persist user query as a conversation turn
     turn = ConversationTurn(
         session_id=session.session_id,
+        request_id=request_id,
         agent=AgentType.ROUTER,  # User input enters via the router
         content=f"[USER QUERY]: {request.query}",
     )
@@ -139,6 +144,7 @@ async def analyze_query(
                 {
                     "tenant_id": tenant_id,
                     "session_id": session.session_id,
+                    "request_id": request_id,
                     "user_query": request.query,
                 },
                 config={"configurable": {"thread_id": session.session_id}}
@@ -157,6 +163,7 @@ async def analyze_query(
             if final_output:
                 final_turn = ConversationTurn(
                     session_id=session.session_id,
+                    request_id=request_id,
                     agent=AgentType.SECURITY_REVIEW,
                     content=final_output,
                 )
@@ -212,6 +219,8 @@ async def approve_hitl(
         async with AsyncSqliteSaver.from_conn_string(db_path) as checkpointer:
             graph = build_agent_graph(conn, embedding_service, credential_manager, env_profile=env_profile, checkpointer=checkpointer)
             
+            request_id = str(uuid.uuid4())
+            
             # We need to get the current state and inject the approval.
             config = {"configurable": {"thread_id": session_id}}
             
@@ -234,6 +243,7 @@ async def approve_hitl(
             if final_output:
                 final_turn = ConversationTurn(
                     session_id=session.session_id,
+                    request_id=request_id,
                     agent=AgentType.SECURITY_REVIEW,
                     content=final_output,
                 )
