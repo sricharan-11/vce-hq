@@ -3,26 +3,29 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 async function fetchRequests() {
+    const tenantId = document.getElementById('tenantInput').value || 'default';
     try {
-        const response = await fetch('/api/trace/requests');
+        const response = await fetch('/api/trace/requests', {
+            headers: { 'X-Tenant-ID': tenantId }
+        });
         const data = await response.json();
-        renderSidebar(data.requests);
+        if (response.ok) {
+            renderSidebar(data.requests);
+        } else {
+            document.getElementById('requestList').innerHTML = `<div style="padding: 20px; color: #ff7b72;">${escapeHtml(data.detail || 'Failed to load')}</div>`;
+        }
     } catch (error) {
         console.error("Error fetching requests:", error);
-        document.getElementById('sidebar').innerHTML += `<div style="padding: 20px; color: #ff7b72;">Failed to load requests</div>`;
+        document.getElementById('requestList').innerHTML = `<div style="padding: 20px; color: #ff7b72;">Failed to load requests</div>`;
     }
 }
 
 function renderSidebar(requests) {
-    const sidebar = document.getElementById('sidebar');
-    
-    // Keep header, remove old items
-    const header = sidebar.querySelector('.sidebar-header');
-    sidebar.innerHTML = '';
-    sidebar.appendChild(header);
+    const requestList = document.getElementById('requestList');
+    requestList.innerHTML = '';
 
     if (!requests || requests.length === 0) {
-        sidebar.innerHTML += `<div style="padding: 20px; color: #8b949e;">No requests found.</div>`;
+        requestList.innerHTML = `<div style="padding: 20px; color: #8b949e;">No requests found.</div>`;
         return;
     }
 
@@ -37,7 +40,7 @@ function renderSidebar(requests) {
             <div class="request-id">${req.request_id.split('-')[0]}...</div>
             <div class="request-time">${date.toLocaleString()}</div>
         `;
-        sidebar.appendChild(div);
+        requestList.appendChild(div);
     });
 }
 
@@ -51,9 +54,16 @@ async function loadTrace(requestId, element) {
     timeline.innerHTML = `<div style="color: #8b949e;">Loading trace data...</div>`;
 
     try {
-        const response = await fetch(`/api/trace/${requestId}`);
+        const tenantId = document.getElementById('tenantInput').value || 'default';
+        const response = await fetch(`/api/trace/${requestId}`, {
+            headers: { 'X-Tenant-ID': tenantId }
+        });
         const data = await response.json();
-        renderTimeline(data.timeline);
+        if (response.ok) {
+            renderTimeline(data.timeline);
+        } else {
+            timeline.innerHTML = `<div style="color: #ff7b72;">${escapeHtml(data.detail || 'Failed to load')}</div>`;
+        }
     } catch (error) {
         console.error("Error fetching trace:", error);
         timeline.innerHTML = `<div style="color: #ff7b72;">Failed to load trace details.</div>`;

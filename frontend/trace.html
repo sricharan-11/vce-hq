@@ -174,8 +174,15 @@
 <body>
 
     <div class="sidebar" id="sidebar">
-        <div class="sidebar-header">Recent Requests</div>
+        <div class="sidebar-header">
+            Recent Requests
+            <div style="margin-top: 10px; font-size: 12px; font-weight: 400;">
+                <label for="tenantInput">Tenant ID:</label>
+                <input type="text" id="tenantInput" value="default" style="width: 100%; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; padding: 5px; border-radius: 4px; margin-top: 5px;" onchange="fetchRequests()">
+            </div>
+        </div>
         <!-- Request items will be injected here -->
+        <div id="requestList"></div>
     </div>
 
     <div class="main-content">
