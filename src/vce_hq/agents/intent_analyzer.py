@@ -148,6 +148,11 @@ def create_intent_analyzer_node(conn: sqlite3.Connection, embedding_service: Any
             state["finops_analysis"] = ""
             state["security_review"] = ""
             state["final_output"] = ""
+            state["security_flags"] = []
+            state["router_iterations"] = 0
+            state["command_log"] = []
+            state["command_count"] = 0
+            state["hitl_pending"] = False
             
             if intent == "CONTINUATION":
                 # Smart Context: Use RAG to fetch semantically relevant older turns
@@ -164,8 +169,6 @@ def create_intent_analyzer_node(conn: sqlite3.Connection, embedding_service: Any
             elif intent == "NEW_TOPIC":
                 # Clear context to avoid confusing the router with old issues
                 conversation_history = ""
-                state["command_log"] = []
-                state["command_count"] = 0
             elif intent == "IRRELEVANT":
                 # Do not execute agents. Security review will output the clarifying question.
                 conversation_history = ""
@@ -174,8 +177,6 @@ def create_intent_analyzer_node(conn: sqlite3.Connection, embedding_service: Any
             else:
                 intent = "NEW_TOPIC"
                 conversation_history = ""
-                state["command_log"] = []
-                state["command_count"] = 0
 
             return {
                 **state,
