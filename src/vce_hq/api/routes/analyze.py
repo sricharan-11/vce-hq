@@ -219,8 +219,6 @@ async def approve_hitl(
         async with AsyncSqliteSaver.from_conn_string(db_path) as checkpointer:
             graph = build_agent_graph(conn, embedding_service, credential_manager, env_profile=env_profile, checkpointer=checkpointer)
             
-            request_id = str(uuid.uuid4())
-            
             # We need to get the current state and inject the approval.
             config = {"configurable": {"thread_id": session_id}}
             
@@ -243,7 +241,7 @@ async def approve_hitl(
             if final_output:
                 final_turn = ConversationTurn(
                     session_id=session.session_id,
-                    request_id=request_id,
+                    request_id=result.get("request_id"),
                     agent=AgentType.SECURITY_REVIEW,
                     content=final_output,
                 )
