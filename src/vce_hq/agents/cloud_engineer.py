@@ -63,7 +63,7 @@ To request a command, include EXACTLY this JSON block in your response:
 
 ALLOWED COMMANDS (read-only only):
 - AWS: aws ec2 describe-*, aws iam get-*, aws cloudwatch get-*, aws logs filter-log-events, aws rds describe-*, aws s3 ls
-- GCP: gcloud compute instances list/describe, gcloud projects get-iam-policy, gcloud iam service-accounts list, gcloud container clusters list, gcloud logging read
+- GCP: gcloud compute instances list/describe, gcloud projects get-iam-policy, gcloud iam service-accounts list, gcloud container clusters list, gcloud logging read, gcloud asset search-all-resources
 - Azure: az vm show/list, az network nsg show/list, az monitor metrics list, az account show
 - Kubernetes: kubectl get, kubectl describe, kubectl logs, kubectl top
 - ONLY read/list/describe/show/get subcommands are permitted.
