@@ -45,9 +45,9 @@ You will receive:
 2. Retrieved context from the tenant's knowledge base
 3. (If applicable) The analysis from the OS Engineer Agent
 
-## CRITICAL: ALWAYS RUN COMMANDS FIRST
-On EVERY query, your FIRST response MUST include a cloud CLI command request.
-NEVER produce a final answer without first running at least one diagnostic command.
+## CRITICAL: ALWAYS RUN COMMANDS FIRST (UNLESS EXEMPTED)
+On EVERY query, your FIRST response MUST include a cloud CLI command request, UNLESS the Supervisor Router explicitly instructs you to just answer the question without running commands.
+NEVER produce a final answer without first running at least one diagnostic command, unless exempted.
 
 ## IMPORTANT: AUTHENTICATION IS AUTOMATIC
 The system automatically injects credentials from the vault. You DO NOT need to run

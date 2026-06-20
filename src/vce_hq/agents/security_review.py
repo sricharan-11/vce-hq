@@ -139,6 +139,9 @@ def create_security_review_node(
         if state.get("cloud_analysis"):
             analysis_parts.append(f"=== Cloud Engineer Analysis ===\n{state['cloud_analysis']}")
 
+        if state.get("finops_analysis"):
+            analysis_parts.append(f"=== FinOps Agent Analysis ===\n{state['finops_analysis']}")
+
         if not analysis_parts:
             return {
                 **state,

@@ -184,6 +184,7 @@ _CLOUD_TIER_1: list[str] = [
     "gcloud projects get-iam-policy", "gcloud projects describe", "gcloud projects list",
     "gcloud iam roles list", "gcloud iam roles describe", "gcloud iam service-accounts list", "gcloud iam service-accounts describe", "gcloud iam service-accounts get-iam-policy",
     "gcloud resource-manager folders list", "gcloud organizations list",
+    "gcloud asset search-all-resources",
     "gcloud container clusters describe", "gcloud container clusters list", "gcloud container node-pools list", "gcloud container node-pools describe",
     "gcloud run services list", "gcloud run services describe", "gcloud run revisions list",
     "gcloud app versions list", "gcloud app services list",

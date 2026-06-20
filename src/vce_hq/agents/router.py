@@ -74,6 +74,12 @@ mapping and the agent only returned ports, re-delegate for docker ps and process
 5. Once you are satisfied that the findings fully address the user's query, delegate to \
 "security_review" to finalize.
 
+## CONVERSATIONAL & CONCEPTUAL QUERIES
+If the user asks a conceptual question (e.g. "which is better?", "how does this work?", or "why did you do X?") that does NOT require running new commands:
+1. You MUST STILL delegate to the appropriate specialist agent (e.g., "cloud_engineer").
+2. Your instruction MUST explicitly state: "Answer the user's question directly. No diagnostic commands are needed for this query."
+3. NEVER delegate directly to "security_review" without a specialist agent producing an answer first.
+
 ## COMMON MULTI-STEP PATTERNS
 
 ### "List listening ports / processes / services on all VMs":
