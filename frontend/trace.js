@@ -86,7 +86,9 @@ function renderTimeline(events) {
         let typeClass = '';
         if (event.type === 'command') typeClass = 'type-command';
         if (event.type === 'token_usage') typeClass = 'type-token';
-        card.classList.add(typeClass);
+        if (typeClass) {
+            card.classList.add(typeClass);
+        }
 
         const date = new Date(event.created_at).toLocaleTimeString();
         
