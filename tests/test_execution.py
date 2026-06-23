@@ -5,15 +5,16 @@ import pytest
 from vce_hq.execution.validator import (
     CommandDomain,
     ValidationStatus,
+    RiskSignal,
     validate_command,
 )
-
+from vce_hq.config import settings, ExecutionMode
 
 class TestCommandValidator:
-    """Tests for the 3-stage command validation flow."""
+    """Tests for the blocklist-first validation flow."""
 
-    def test_os_allowlist_pass(self) -> None:
-        """Valid OS commands should pass."""
+    def test_os_read_commands_pass(self) -> None:
+        """Valid OS read commands should pass with NONE risk."""
         commands = [
             "df -hT",
             "journalctl -u nginx -n 50",
@@ -25,9 +26,10 @@ class TestCommandValidator:
             result = validate_command(cmd, CommandDomain.OS)
             assert result.approved is True, f"Expected {cmd} to be approved"
             assert result.status == ValidationStatus.APPROVED
+            assert result.risk_signal == RiskSignal.NONE
 
-    def test_cloud_allowlist_pass(self) -> None:
-        """Valid Cloud commands should pass."""
+    def test_cloud_read_commands_pass(self) -> None:
+        """Valid Cloud read commands should pass with NONE risk."""
         commands = [
             "aws ec2 describe-instances --filters Name=instance-type,Values=m5.large",
             "gcloud compute instances list",
@@ -37,43 +39,86 @@ class TestCommandValidator:
         for cmd in commands:
             result = validate_command(cmd, CommandDomain.CLOUD)
             assert result.approved is True, f"Expected {cmd} to be approved"
+            assert result.status == ValidationStatus.APPROVED
+            assert result.risk_signal == RiskSignal.NONE
 
-    def test_os_blocklist_reject(self) -> None:
-        """Blocked OS commands should be rejected."""
+    def test_os_global_blocklist(self) -> None:
+        """Globally blocked OS commands should be rejected."""
         commands = [
-            "rm -rf /",                  # Destructive
-            "systemctl restart nginx",   # Write operation
-            "chmod 777 /etc/shadow",     # Permission change
-            "useradd evil",              # User management
-            "kill -9 1234",              # Process kill
             "fdisk /dev/sda",            # Disk partitioning
-            "apt install nmap",          # Package installation
+            "mkfs.ext4 /dev/sda1",       # Formatting
+            "useradd evil",              # User management
+            "iptables -F",               # Firewall flush
+            "vi /etc/passwd",            # Interactive editor
         ]
         for cmd in commands:
             result = validate_command(cmd, CommandDomain.OS)
             assert result.approved is False, f"Expected {cmd} to be blocked"
             assert result.status == ValidationStatus.BLOCKED
 
-    def test_cloud_blocklist_reject(self) -> None:
-        """Blocked Cloud commands should be rejected."""
+    def test_cloud_global_blocklist(self) -> None:
+        """Globally blocked Cloud commands should be rejected."""
         commands = [
-            "aws ec2 terminate-instances --instance-ids i-12345",
-            "aws s3 rm s3://mybucket/file",
-            "gcloud compute instances stop my-vm",
-            "az vm deallocate -n my-vm",
-            "kubectl delete pod my-pod",
-            "kubectl apply -f deployment.yaml",
+            "gcloud projects delete my-project",
+            "aws organizations close-account --account-id 123",
+            "terraform destroy",
+            "kubectl delete namespace prod",
+            "aws s3 rm s3://bucket --force", # Dangerous flag combo
         ]
         for cmd in commands:
             result = validate_command(cmd, CommandDomain.CLOUD)
             assert result.approved is False, f"Expected {cmd} to be blocked"
             assert result.status == ValidationStatus.BLOCKED
 
-    def test_not_allowlisted(self) -> None:
-        """Commands not explicitly allowlisted should be rejected."""
-        result = validate_command("echo hello", CommandDomain.OS)
+    def test_os_mode_blocklist(self) -> None:
+        """Mutating and destructive commands should be blocked in Mode 1."""
+        settings.execution_mode = ExecutionMode.MODE_1
+        commands = [
+            "rm -rf /",                  # Destructive
+            "kill -9 1234",              # Destructive
+            "systemctl restart nginx",   # Mutating
+            "chmod 777 /etc/shadow",     # Mutating
+        ]
+        for cmd in commands:
+            result = validate_command(cmd, CommandDomain.OS)
+            assert result.approved is False, f"Expected {cmd} to be blocked"
+            assert result.status == ValidationStatus.MODE_BLOCKED
+
+    def test_cloud_mode_blocklist(self) -> None:
+        """Mutating and destructive commands should be blocked in Mode 1."""
+        settings.execution_mode = ExecutionMode.MODE_1
+        commands = [
+            "aws ec2 terminate-instances --instance-ids i-12345", # Destructive
+            "gcloud compute instances stop my-vm",                # Mutating
+            "kubectl apply -f deployment.yaml",                   # Mutating
+        ]
+        for cmd in commands:
+            result = validate_command(cmd, CommandDomain.CLOUD)
+            assert result.approved is False, f"Expected {cmd} to be blocked"
+            assert result.status == ValidationStatus.MODE_BLOCKED
+
+    def test_mode_2_allows_mutating(self) -> None:
+        """Mode 2 should allow mutating verbs but block destructive verbs."""
+        settings.execution_mode = ExecutionMode.MODE_2
+        
+        # Should be blocked
+        result = validate_command("rm -rf /", CommandDomain.OS)
         assert result.approved is False
-        assert result.status == ValidationStatus.NOT_ALLOWLISTED
+        assert result.status == ValidationStatus.MODE_BLOCKED
+        
+        # Should be approved with ELEVATED risk
+        result = validate_command("systemctl restart nginx", CommandDomain.OS)
+        assert result.approved is True
+        assert result.risk_signal == RiskSignal.ELEVATED
+
+        # Reset mode for other tests
+        settings.execution_mode = ExecutionMode.MODE_1
+
+    def test_unknown_command_passes(self) -> None:
+        """Commands that don't match any blocklist should pass."""
+        result = validate_command("echo hello", CommandDomain.OS)
+        assert result.approved is True
+        assert result.risk_signal == RiskSignal(settings.unknown_binary_risk.lower())
 
     def test_shell_injection_pipes(self) -> None:
         """Safe pipes should pass, dangerous pipes should fail."""

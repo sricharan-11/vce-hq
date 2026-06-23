@@ -1,12 +1,15 @@
-"""Command validator — allowlist/blocklist enforcement.
+"""Command validator — blocklist-first enforcement.
 
-Implements the three-stage validation flow from PRD_Brain_v1.2:
-    1. Tiered Allowlist Classification (No LLM) -> Sets matched_tier
-    2. Regex blocklist check (reject known-dangerous patterns not allowed in ANY mode)
-    3. Argument sanitization (reject shell injection vectors)
+Implements the blocklist-first validation flow from PRD_Brain_vB1.2:
+    Stage 1: Global Blocklist → REJECT if match
+    Stage 1b: Mode Blocklist → REJECT if action verb is blocked in current mode
+    Stage 2: Risk Signal Heuristic → tag NONE/ELEVATED/CRITICAL (never rejects)
+    Stage 2.5: Horizontal API Translation → for curl/python, map HTTP methods to risk
+    Stage 3: Injection Sanitization → reject shell injection vectors
+    Stage 4: SSH inner-command validation → validate gcloud compute ssh payloads
 
-Every command an agent formulates MUST pass validation before execution.
-Validation failures are logged with the rejection reason.
+The blocklist is the ONLY gate that rejects commands.
+The Risk Signal Heuristic only decides downstream scrutiny (LLM Gate, HITL).
 """
 
 from __future__ import annotations
@@ -16,55 +19,25 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
+from vce_hq.config import settings
+
 logger = logging.getLogger(__name__)
 
-# Horizontal API Translation Mapping
-# We map REST endpoints/actions to Tiers to evaluate raw scripts (python/curl) without LLM overhead.
-# Since AWS actions are in headers/payloads (not URLs), we map standard Action names too.
 
-_API_ALLOWLIST = {
-    1: [
-        # GCP (Read Only endpoints or base domains assuming GET method)
-        re.compile(r"https://(compute|logging|monitoring|cloudbilling|cloudresourcemanager|iam|container|run|appengine|cloudfunctions|sqladmin|storage|serviceusage|dns|networkconnectivity)\.googleapis\.com/.*", re.IGNORECASE),
-        
-        # AWS (Action headers for describing/listing)
-        re.compile(r"(Describe|List|Get|Simulate|FilterLogEvents)[A-Za-z]+", re.IGNORECASE),
-        
-        # Azure (Read Only ARM endpoints)
-        re.compile(r"https://management\.azure\.com/subscriptions/.*", re.IGNORECASE),
-    ],
-    2: [
-        # GCP (Start/Stop/Update)
-        re.compile(r"https://compute\.googleapis\.com/compute/v1/projects/[^/]+/zones/[^/]+/instances/[^/]+/(start|stop|setLabels)", re.IGNORECASE),
-        re.compile(r"https://cloudbilling\.googleapis\.com/v1/projects/[^/]+/billingInfo", re.IGNORECASE),
-        
-        # AWS (State transitions)
-        re.compile(r"(Start|Stop|Modify)[A-Za-z]+", re.IGNORECASE),
-        
-        # Azure (Start/Stop)
-        re.compile(r"https://management\.azure\.com/subscriptions/.*/(start|stop|restart|deallocate)", re.IGNORECASE),
-    ],
-    3: [
-        # GCP (Destructive)
-        re.compile(r"https://compute\.googleapis\.com/compute/v1/projects/[^/]+/zones/[^/]+/instances/[^/]+$", re.IGNORECASE), # DELETE
-        
-        # AWS (Destructive)
-        re.compile(r"(Terminate|Delete|Create)[A-Za-z]+", re.IGNORECASE),
-        
-        # Azure (Destructive)
-        re.compile(r"https://management\.azure\.com/subscriptions/.*/delete", re.IGNORECASE),
-    ]
-}
+# ══════════════════════════════════════════════════════════════
+# RISK SIGNAL — Tags for downstream security gate routing
+# ══════════════════════════════════════════════════════════════
 
-def _detect_destructive_methods(command: str) -> bool:
-    """Detect if a raw script contains destructive HTTP methods or actions."""
-    destructive_keywords = [
-        r'requests\.delete', r'requests\.post', r'requests\.put', r'requests\.patch',
-        r'method=[\'"]DELETE[\'"]', r'method=[\'"]POST[\'"]', r'method=[\'"]PUT[\'"]',
-        r'-X\s*DELETE', r'-X\s*POST', r'-X\s*PUT', r'-X\s*PATCH'
-    ]
-    return any(re.search(pattern, command, re.IGNORECASE) for pattern in destructive_keywords)
+class RiskSignal(StrEnum):
+    """Risk level tagged by the heuristic. Never causes rejection."""
+    NONE = "none"           # Execute immediately, no LLM Gate
+    ELEVATED = "elevated"   # Route to LLM Gate for review
+    CRITICAL = "critical"   # Route to LLM Gate + flag for HITL
 
+
+# ══════════════════════════════════════════════════════════════
+# ENUMS & DATA CLASSES
+# ══════════════════════════════════════════════════════════════
 
 class CommandDomain(StrEnum):
     """Identifies which agent domain a command belongs to."""
@@ -75,7 +48,7 @@ class ValidationStatus(StrEnum):
     """Result of command validation."""
     APPROVED = "approved"
     BLOCKED = "blocked_by_blocklist"
-    NOT_ALLOWLISTED = "not_in_allowlist"
+    MODE_BLOCKED = "blocked_by_mode"
     SANITIZATION_FAILED = "sanitization_failed"
 
 @dataclass(frozen=True)
@@ -87,157 +60,413 @@ class ValidationResult:
         command: The original command string.
         domain: The domain the command was validated against.
         reason: Human-readable explanation (especially for rejections).
-        matched_tier: The tier (1, 2, or 3) that matched the command.
+        risk_signal: The risk level tag (NONE/ELEVATED/CRITICAL).
+            Only meaningful when status is APPROVED.
     """
     status: ValidationStatus
     command: str
     domain: CommandDomain
     reason: str
-    matched_tier: int | None = None  # 1, 2, or 3
+    risk_signal: RiskSignal = RiskSignal.NONE
 
     @property
     def approved(self) -> bool:
         """Whether the command passed validation."""
         return self.status == ValidationStatus.APPROVED
 
+
 # ══════════════════════════════════════════════════════════════
-# OS DOMAIN
+# GLOBAL BLOCKLIST — Always blocked, regardless of mode
 # ══════════════════════════════════════════════════════════════
 
-_OS_TIER_1: list[str] = [
-    # System
-    "uname", "uptime", "hostnamectl", "timedatectl", "hostname",
-    # CPU
-    "top -b", "mpstat", "pidstat", "cat /proc/loadavg", "nproc",
-    # Memory
-    "free", "vmstat", "cat /proc/meminfo", "slabtop -o",
-    # Disk
-    "df", "du -s", "du -sh", "lsblk", "blkid", "cat /proc/mounts", "iostat", "findmnt", "stat ",
-    # Processes
-    "ps ", "pstree", "cat /proc/", "ls /proc/",
-    # Network
-    "ss ", "ip addr", "ip route", "ip link", "ip neigh", "cat /etc/resolv.conf", "cat /etc/hosts",
-    "iptables -L", "iptables -S", "iptables -nvL", "nft list", "netstat ",
-    # Logs
-    "journalctl ", "dmesg", "tail ", "head ", "cat /var/log/", "zcat /var/log/", "less /var/log/", "grep ",
-    # Systemd
-    "systemctl status", "systemctl list-units", "systemctl show", "systemctl is-active", "systemctl is-enabled", "systemctl is-failed",
-    # Kernel
-    "sysctl ", "lsmod", "modinfo",
-    # Packages
-    "dpkg -l", "dpkg -s", "dpkg --list", "apt list", "apt-cache", "apt show", "rpm -q", "yum list", "yum info",
-    # Misc read-only
-    "whoami", "id", "w", "who", "last", "lastlog", "date", "cal", "env", "printenv", "lscpu", "lsmem", "lsns", "lsof", "mount", "cat /etc/fstab", "ulimit", "getconf",
-    # Remote VM access via gcloud SSH
-    "gcloud compute ssh",
-]
-
-_OS_TIER_2: list[str] = [
-    "systemctl start", "systemctl stop", "systemctl restart", "systemctl enable", "systemctl disable", "systemctl daemon-reload",
-    "chmod ", "chown ", "chgrp ",
-]
-
-_OS_TIER_3: list[str] = [
-    "rm ", "rmdir ", "kill ", "killall ", "pkill ", "reboot", "shutdown", "poweroff",
-    "apt install", "apt remove", "apt-get install", "apt-get remove", "apt purge", "apt-get purge",
-    "yum install", "yum remove", "dnf install", "dnf remove",
-]
-
-# Patterns blocked in ALL modes (e.g. disk formatting, shell injection, interactive editors)
-_OS_BLOCKLIST_PATTERNS: list[re.Pattern[str]] = [
+_GLOBAL_BLOCKLIST_OS: list[re.Pattern[str]] = [
+    # Filesystem destruction
     re.compile(r"\bmkfs\b", re.IGNORECASE),
     re.compile(r"\bfdisk\b", re.IGNORECASE),
     re.compile(r"\bparted\b", re.IGNORECASE),
     re.compile(r"\bdd\s", re.IGNORECASE),
+    re.compile(r"\bshred\b", re.IGNORECASE),
+    re.compile(r"\bwipefs\b", re.IGNORECASE),
+    # Block device writes
+    re.compile(r">\s*/dev/(sd|nvme|xvd|vd)", re.IGNORECASE),
+    # Interactive editors (agents can't interact with TUI)
     re.compile(r"\b(vi|vim|nano|emacs|ed)\s"),
+    # Fork bombs
+    re.compile(r":\(\)\s*\{"),
+    # Cron manipulation
+    re.compile(r"\bcrontab\s+-(e|r)\b"),
+    # User/account manipulation
+    re.compile(r"\b(useradd|userdel|usermod)\b", re.IGNORECASE),
+    re.compile(r"\bpasswd\b", re.IGNORECASE),
+    # Privilege escalation configuration
+    re.compile(r"\bvisudo\b", re.IGNORECASE),
+    re.compile(r"\bsudoers\b", re.IGNORECASE),
+    # Firewall flush (wipes all rules, exposes network)
+    re.compile(r"\biptables\s+-(F|X)\b"),
+    re.compile(r"\bnft\s+flush\b", re.IGNORECASE),
+    # Swap manipulation
+    re.compile(r"\b(swapoff|swapon)\b", re.IGNORECASE),
 ]
+
+_GLOBAL_BLOCKLIST_CLOUD: list[re.Pattern[str]] = [
+    # Entire project / account / resource group deletion
+    re.compile(r"\bgcloud\s+projects\s+delete\b", re.IGNORECASE),
+    re.compile(r"\baws\s+organizations\s+close-account\b", re.IGNORECASE),
+    re.compile(r"\baz\s+group\s+delete\b", re.IGNORECASE),
+    # Namespace deletion (cascading)
+    re.compile(r"\bkubectl\s+delete\s+namespace\b", re.IGNORECASE),
+    re.compile(r"\bkubectl\s+delete\s+ns\b", re.IGNORECASE),
+    # Infrastructure-as-code teardown
+    re.compile(r"\bterraform\s+destroy\b", re.IGNORECASE),
+    re.compile(r"\bpulumi\s+destroy\b", re.IGNORECASE),
+    # Dangerous flags combined with destructive verbs
+    # (matched separately via _has_dangerous_flag_combo)
+]
+
+def _has_dangerous_flag_combo(command: str) -> str | None:
+    """Check for dangerous flag combinations with destructive verbs.
+
+    Flags like --force, --quiet, --no-wait combined with destructive
+    verbs bypass safety prompts.
+
+    Returns:
+        A reason string if dangerous combo detected, None otherwise.
+    """
+    destructive_verb_pattern = re.compile(
+        r"\b(delete|terminate|destroy|remove|rm|purge|deallocate|unlink)\b",
+        re.IGNORECASE,
+    )
+    if not destructive_verb_pattern.search(command):
+        return None
+
+    dangerous_flags = [
+        (re.compile(r"--force\b"), "--force with destructive verb"),
+        (re.compile(r"--quiet\b"), "--quiet with destructive verb"),
+        (re.compile(r"--no-wait\b"), "--no-wait with destructive verb"),
+        (re.compile(r"-f\b(?!\s*[/\w])"), "-f (force) with destructive verb"),
+    ]
+    for pattern, reason in dangerous_flags:
+        if pattern.search(command):
+            return reason
+    return None
+
 
 # ══════════════════════════════════════════════════════════════
-# CLOUD DOMAIN
+# MODE BLOCKLIST — Verb sets blocked per execution mode
 # ══════════════════════════════════════════════════════════════
 
-_CLOUD_TIER_1: list[str] = [
-    "aws ec2 describe-", "aws ec2 get-",
-    "aws iam get-", "aws iam list-", "aws iam simulate-", "aws iam get-account-summary",
-    "aws elbv2 describe-", "aws elb describe-",
-    "aws cloudwatch get-", "aws cloudwatch describe-", "aws cloudwatch list-",
-    "aws logs filter-log-events", "aws logs describe-log-groups", "aws logs describe-log-streams", "aws logs get-log-events", "aws logs get-",
-    "aws ecs describe-", "aws ecs list-", "aws eks describe-", "aws eks list-", "aws rds describe-",
-    "aws s3 ls", "aws s3api get-", "aws s3api list-", "aws s3api head-",
-    "aws sts get-caller-identity", "aws lambda get-", "aws lambda list-", "aws route53 list-", "aws route53 get-",
-    "aws sns list-", "aws sns get-", "aws sqs list-", "aws sqs get-", "aws sqs receive-message",
-    "aws autoscaling describe-", "aws cloudformation describe-", "aws cloudformation list-",
-    "aws pricing ", "aws ce ", "aws organizations describe-", "aws organizations list-", "aws account get-", "aws support describe-",
-    "gcloud compute instances list", "gcloud compute instances describe",
-    "gcloud compute disks list", "gcloud compute disks describe",
-    "gcloud compute firewall-rules list", "gcloud compute firewall-rules describe",
-    "gcloud compute networks list", "gcloud compute networks describe",
-    "gcloud compute subnets list", "gcloud compute subnets describe",
-    "gcloud compute forwarding-rules list", "gcloud compute forwarding-rules describe",
-    "gcloud compute backend-services list", "gcloud compute backend-services describe",
-    "gcloud compute url-maps list", "gcloud compute url-maps describe",
-    "gcloud compute addresses list", "gcloud compute addresses describe",
-    "gcloud compute routers list", "gcloud compute routers describe",
-    "gcloud compute routes list", "gcloud compute ssl-certificates list", "gcloud compute target-https-proxies list",
-    "gcloud compute machine-types list", "gcloud compute regions list", "gcloud compute zones list",
-    "gcloud compute operations list", "gcloud compute operations describe",
-    "gcloud projects get-iam-policy", "gcloud projects describe", "gcloud projects list",
-    "gcloud iam roles list", "gcloud iam roles describe", "gcloud iam service-accounts list", "gcloud iam service-accounts describe", "gcloud iam service-accounts get-iam-policy",
-    "gcloud resource-manager folders list", "gcloud organizations list",
-    "gcloud asset search-all-resources",
-    "gcloud container clusters describe", "gcloud container clusters list", "gcloud container node-pools list", "gcloud container node-pools describe",
-    "gcloud run services list", "gcloud run services describe", "gcloud run revisions list",
-    "gcloud app versions list", "gcloud app services list",
-    "gcloud functions list", "gcloud functions describe",
-    "gcloud sql instances describe", "gcloud sql instances list", "gcloud sql databases list",
-    "gcloud storage ls", "gcloud storage buckets list",
-    "gcloud billing accounts list", "gcloud billing accounts describe", "gcloud billing budgets list", "gcloud billing budgets describe",
-    "gcloud billing projects describe", "gcloud billing projects list",
-    "gcloud services list", "gcloud services enable --dry-run", "gcloud services pricing",
-    "gcloud logging read", "gcloud logging logs list", "gcloud logging sinks list",
-    "gcloud monitoring dashboards list",
-    "gcloud dns managed-zones list", "gcloud dns record-sets list",
-    "gcloud network-connectivity hubs list",
-    "gcloud config list", "gcloud config configurations list", "gcloud info", "gcloud auth list",
-    "az vm show", "az vm list", "az vmss show", "az vmss list",
-    "az network nsg show", "az network nsg list", "az network vnet show", "az network vnet list",
-    "az network lb show", "az network lb list", "az network public-ip show", "az network public-ip list",
-    "az network nic show", "az network nic list", "az network route-table show", "az network route-table list",
-    "az network application-gateway show", "az network application-gateway list",
-    "az network dns zone list", "az network dns record-set list",
-    "az role assignment list", "az role definition list", "az ad sp show", "az ad sp list",
-    "az aks show", "az aks list", "az container show", "az container list",
-    "az monitor metrics list", "az monitor log-analytics query", "az monitor activity-log list",
-    "az storage account show", "az storage account list", "az storage blob list", "az storage container list",
-    "az resource show", "az resource list", "az account show", "az account list", "az account subscription list", "az group show", "az group list",
-    "az billing ", "az consumption ",
-    "kubectl get ", "kubectl describe ", "kubectl logs ", "kubectl log ", "kubectl top ", "kubectl cluster-info",
-    "kubectl api-resources", "kubectl api-versions", "kubectl config view", "kubectl config current-context", "kubectl config get-contexts",
-    "kubectl version", "kubectl explain ", "kubectl rollout status", "kubectl rollout history", "kubectl auth can-i",
-]
+_DESTRUCTIVE_VERBS: set[str] = {
+    "create", "delete", "terminate", "destroy", "rm", "rmdir",
+    "kill", "killall", "pkill", "reboot", "shutdown", "poweroff",
+    "unlink", "install", "remove", "purge", "deallocate",
+}
 
-_CLOUD_TIER_2: list[str] = [
-    "aws ec2 start-", "aws ec2 stop-", "aws ec2 modify-",
-    "gcloud compute instances start", "gcloud compute instances stop", "gcloud compute instances update",
-    "gcloud billing projects link",
-    "az vm start", "az vm stop", "az vm update",
-    "kubectl scale ", "kubectl rollout ", "kubectl set ", "kubectl apply ", "kubectl patch ", "kubectl edit ",
-]
+_MUTATING_VERBS: set[str] = {
+    "start", "stop", "restart", "update", "modify", "scale",
+    "set", "apply", "patch", "edit", "enable", "disable",
+    "daemon-reload", "link", "rollout", "chmod", "chown", "chgrp",
+}
 
-_CLOUD_TIER_3: list[str] = [
-    "aws ec2 terminate-", "aws ec2 create-", "aws ec2 delete-",
-    "gcloud compute instances create", "gcloud compute instances delete",
-    "gcloud billing projects unlink",
-    "az vm create", "az vm delete", "az vm deallocate",
-    "kubectl delete ", "kubectl create ",
-]
+# Mode 1 blocks mutating + destructive verbs
+# Mode 2 blocks destructive verbs only
+# Mode 3 blocks nothing (only global blocklist applies)
+_MODE_BLOCKED_VERBS: dict[int, set[str]] = {
+    1: _MUTATING_VERBS | _DESTRUCTIVE_VERBS,
+    2: _DESTRUCTIVE_VERBS,
+    3: set(),  # No mode-specific blocks
+}
 
-_CLOUD_BLOCKLIST_PATTERNS: list[re.Pattern[str]] = [
-    # Patterns blocked in ALL modes
-]
 
 # ══════════════════════════════════════════════════════════════
-# SHARED — Shell Injection Sanitization
+# CLI NAMESPACE PREFIXES — For verb extraction
+# ══════════════════════════════════════════════════════════════
+
+# Ordered longest-first so greedy matching works correctly.
+_CLI_NAMESPACE_PREFIXES: list[str] = [
+    # GCP — multi-level namespaces
+    "gcloud compute instances ",
+    "gcloud compute disks ",
+    "gcloud compute firewall-rules ",
+    "gcloud compute networks ",
+    "gcloud compute subnets ",
+    "gcloud compute forwarding-rules ",
+    "gcloud compute backend-services ",
+    "gcloud compute url-maps ",
+    "gcloud compute addresses ",
+    "gcloud compute routers ",
+    "gcloud compute routes ",
+    "gcloud compute ssl-certificates ",
+    "gcloud compute target-https-proxies ",
+    "gcloud compute machine-types ",
+    "gcloud compute regions ",
+    "gcloud compute zones ",
+    "gcloud compute operations ",
+    "gcloud compute ssh",  # special case — treated as read in verb extraction
+    "gcloud compute ",
+    "gcloud container clusters ",
+    "gcloud container node-pools ",
+    "gcloud container ",
+    "gcloud run services ",
+    "gcloud run revisions ",
+    "gcloud run ",
+    "gcloud app versions ",
+    "gcloud app services ",
+    "gcloud app ",
+    "gcloud functions ",
+    "gcloud sql instances ",
+    "gcloud sql databases ",
+    "gcloud sql ",
+    "gcloud storage buckets ",
+    "gcloud storage ",
+    "gcloud billing projects ",
+    "gcloud billing accounts ",
+    "gcloud billing budgets ",
+    "gcloud billing ",
+    "gcloud services ",
+    "gcloud logging ",
+    "gcloud monitoring dashboards ",
+    "gcloud monitoring ",
+    "gcloud dns managed-zones ",
+    "gcloud dns record-sets ",
+    "gcloud dns ",
+    "gcloud network-connectivity hubs ",
+    "gcloud projects ",
+    "gcloud iam roles ",
+    "gcloud iam service-accounts ",
+    "gcloud iam ",
+    "gcloud resource-manager folders ",
+    "gcloud organizations ",
+    "gcloud asset ",
+    "gcloud config configurations ",
+    "gcloud config ",
+    "gcloud auth ",
+    "gcloud ",
+    # AWS — two-level namespaces
+    "aws ec2 ",
+    "aws iam ",
+    "aws elbv2 ",
+    "aws elb ",
+    "aws cloudwatch ",
+    "aws logs ",
+    "aws ecs ",
+    "aws eks ",
+    "aws rds ",
+    "aws s3api ",
+    "aws s3 ",
+    "aws sts ",
+    "aws lambda ",
+    "aws route53 ",
+    "aws sns ",
+    "aws sqs ",
+    "aws autoscaling ",
+    "aws cloudformation ",
+    "aws pricing ",
+    "aws ce ",
+    "aws organizations ",
+    "aws account ",
+    "aws support ",
+    "aws ",
+    # Azure — two-level namespaces
+    "az vm ",
+    "az vmss ",
+    "az network nsg ",
+    "az network vnet ",
+    "az network lb ",
+    "az network public-ip ",
+    "az network nic ",
+    "az network route-table ",
+    "az network application-gateway ",
+    "az network dns zone ",
+    "az network dns record-set ",
+    "az network ",
+    "az role assignment ",
+    "az role definition ",
+    "az ad sp ",
+    "az ad ",
+    "az aks ",
+    "az container ",
+    "az monitor metrics ",
+    "az monitor log-analytics ",
+    "az monitor activity-log ",
+    "az monitor ",
+    "az storage account ",
+    "az storage blob ",
+    "az storage container ",
+    "az storage ",
+    "az resource ",
+    "az account ",
+    "az group ",
+    "az billing ",
+    "az consumption ",
+    "az ",
+    # Kubernetes
+    "kubectl ",
+    # Systemd
+    "systemctl ",
+]
+
+# OS utilities that are inherently read-only (the binary name IS the verb)
+_READ_ONLY_OS_UTILITIES: set[str] = {
+    "ps", "pstree", "top", "htop",
+    "df", "du", "lsblk", "blkid", "findmnt", "stat", "iostat",
+    "free", "vmstat", "slabtop",
+    "ss", "ip", "netstat", "nft",
+    "journalctl", "dmesg",
+    "cat", "head", "tail", "less", "more", "zcat", "grep",
+    "uname", "uptime", "hostnamectl", "timedatectl", "hostname",
+    "mpstat", "pidstat", "nproc", "lscpu", "lsmem", "lsns", "lsof",
+    "whoami", "id", "w", "who", "last", "lastlog",
+    "date", "cal", "env", "printenv",
+    "sysctl", "lsmod", "modinfo",
+    "dpkg", "apt-cache", "rpm", "yum", "mount", "ulimit", "getconf",
+    "ls",
+}
+
+
+# ══════════════════════════════════════════════════════════════
+# VERB EXTRACTION
+# ══════════════════════════════════════════════════════════════
+
+def _extract_action_verb(command: str) -> str | None:
+    """Extract the action verb from a command by stripping CLI namespace prefixes.
+
+    Examples:
+        "gcloud compute instances list --project=x" → "list"
+        "kubectl delete pod my-pod" → "delete"
+        "systemctl restart nginx" → "restart"
+        "ps aux" → "ps" (bare OS utility)
+        "aws ec2 describe-instances" → "describe-instances" → verb root "describe"
+
+    Returns:
+        The extracted verb string, or None if extraction fails.
+    """
+    cmd_lower = command.lower().strip()
+
+    # Try stripping CLI namespace prefixes (longest-first)
+    for prefix in _CLI_NAMESPACE_PREFIXES:
+        if cmd_lower.startswith(prefix.lower()):
+            remainder = command[len(prefix):].strip()
+            if remainder:
+                # The first token after the namespace is the action verb
+                verb = remainder.split()[0].lower()
+                # Handle compound verbs like "describe-instances" → "describe"
+                if "-" in verb:
+                    verb_root = verb.split("-")[0]
+                    return verb_root
+                return verb
+            # gcloud compute ssh — the prefix itself is the command
+            if "ssh" in prefix:
+                return "ssh"
+            return None
+
+    # Bare OS utility — the command name itself is the verb
+    first_token = command.split()[0].lower() if command.split() else None
+    if first_token:
+        # Strip path if present (e.g., /usr/bin/ps → ps)
+        bare = first_token.rsplit("/", 1)[-1]
+        return bare
+
+    return None
+
+
+# ══════════════════════════════════════════════════════════════
+# RISK SIGNAL HEURISTIC — Tags, never rejects
+# ══════════════════════════════════════════════════════════════
+
+def _assess_risk_signal(command: str, verb: str | None) -> RiskSignal:
+    """Tag a command with a risk level for downstream security gate routing.
+
+    This function NEVER rejects — it only decides how much scrutiny
+    the LLM Gate and HITL should apply.
+
+    Args:
+        command: The full command string.
+        verb: The extracted action verb (may be None).
+
+    Returns:
+        A RiskSignal tag.
+    """
+    if verb is None:
+        # Can't determine verb — treat as elevated for safety
+        return RiskSignal(settings.unknown_binary_risk.lower())
+
+    # Check if it's a known read-only OS utility
+    if verb in _READ_ONLY_OS_UTILITIES:
+        return RiskSignal.NONE
+
+    # Check destructive verbs → CRITICAL
+    if verb in _DESTRUCTIVE_VERBS:
+        return RiskSignal.CRITICAL
+
+    # Check mutating verbs → ELEVATED
+    if verb in _MUTATING_VERBS:
+        return RiskSignal.ELEVATED
+
+    # Known read verbs from cloud CLIs
+    _read_verbs = {
+        "list", "describe", "get", "show", "status", "info", "view",
+        "explain", "logs", "log", "top", "read", "query", "search",
+        "filter", "can-i", "cluster-info", "api-resources", "api-versions",
+        "version", "auth", "ls", "head", "history", "ssh",
+    }
+    if verb in _read_verbs:
+        return RiskSignal.NONE
+
+    # Unknown verb — route to LLM Gate for review
+    return RiskSignal(settings.unknown_binary_risk.lower())
+
+
+# ══════════════════════════════════════════════════════════════
+# HORIZONTAL API TRANSLATION — Risk signals for raw scripts
+# ══════════════════════════════════════════════════════════════
+
+# Known read-only POST endpoints (APIs that use POST for queries)
+_READ_ONLY_POST_ENDPOINTS: list[re.Pattern[str]] = [
+    re.compile(r"monitoring\.googleapis\.com/.*/timeSeries:query", re.IGNORECASE),
+    re.compile(r"logging\.googleapis\.com/.*/entries:list", re.IGNORECASE),
+    re.compile(r"/graphql\b", re.IGNORECASE),
+]
+
+def _assess_script_risk(command: str) -> RiskSignal:
+    """Assess risk for raw scripts (curl, python) via HTTP method analysis.
+
+    Maps HTTP methods to risk signals:
+        GET/HEAD/OPTIONS → NONE
+        POST (to known read endpoints) → NONE
+        POST/PUT/PATCH → ELEVATED
+        DELETE → CRITICAL
+
+    Args:
+        command: The full script command string.
+
+    Returns:
+        A RiskSignal for the script.
+    """
+    # Detect HTTP methods
+    has_delete = bool(re.search(
+        r"(-X\s*DELETE|requests\.delete|method=['\"]DELETE['\"])",
+        command, re.IGNORECASE,
+    ))
+    has_mutating = bool(re.search(
+        r"(-X\s*(POST|PUT|PATCH)|requests\.(post|put|patch)|method=['\"](?:POST|PUT|PATCH)['\"])",
+        command, re.IGNORECASE,
+    ))
+
+    if has_delete:
+        return RiskSignal.CRITICAL
+    if has_mutating:
+        # Check if POST is to a known read-only endpoint
+        endpoints = re.findall(r'https?://[^\s\'"]+', command)
+        for endpoint in endpoints:
+            if any(p.search(endpoint) for p in _READ_ONLY_POST_ENDPOINTS):
+                return RiskSignal.NONE
+        return RiskSignal.ELEVATED
+
+    return RiskSignal.NONE
+
+
+# ══════════════════════════════════════════════════════════════
+# SHARED — Shell Injection Sanitization (unchanged from v1.2)
 # ══════════════════════════════════════════════════════════════
 
 _INJECTION_PATTERNS: list[re.Pattern[str]] = [
@@ -266,47 +495,55 @@ _SAFE_PIPE_TARGETS: list[str] = [
     "cut", "tr", "column", "less", "more", "cat", "jq", "xargs echo",
 ]
 
+
 # ══════════════════════════════════════════════════════════════
-# ALLOWLIST REFERENCE (for Router prompt injection)
+# BLOCKLIST REFERENCE (for Router prompt injection)
 # ══════════════════════════════════════════════════════════════
 
-def get_allowlist_reference() -> str:
-    """Build a formatted reference of all allowlisted command prefixes.
+def get_blocklist_reference() -> str:
+    """Build a formatted reference of blocklist constraints and mode restrictions.
 
-    Used by the Supervisor Router to know exactly which commands are
-    available so it can suggest concrete alternatives when an agent
-    reports that something is "not possible".
+    Used by the Supervisor Router to understand what's blocked and why,
+    so it can suggest alternative approaches when a command is rejected.
 
     Returns:
-        A multi-line string listing all tiers for OS and Cloud domains.
+        A multi-line string describing blocklist patterns and mode restrictions.
     """
-    def _fmt(tier_name: str, prefixes: list[str]) -> str:
-        items = ", ".join(f"`{p.strip()}`" for p in prefixes)
-        return f"  {tier_name}: {items}"
-
-    # FinOps-specific command prefixes (subset of Cloud tiers used by finops_agent)
-    _FINOPS_TIER_1 = [p for p in _CLOUD_TIER_1 if any(
-        kw in p for kw in ("pricing", "ce ", "billing", "consumption")
-    )]
-    _FINOPS_TIER_2 = [p for p in _CLOUD_TIER_2 if "billing" in p]
-    _FINOPS_TIER_3 = [p for p in _CLOUD_TIER_3 if "billing" in p]
+    mode_num = int(str(settings.execution_mode)[-1])
 
     sections = [
-        "## OS Domain",
-        _fmt("Tier 1 (Read-Only)", _OS_TIER_1),
-        _fmt("Tier 2 (Service Control)", _OS_TIER_2),
-        _fmt("Tier 3 (Destructive)", _OS_TIER_3),
+        "## Blocklist Constraints (Current Mode: {})".format(settings.execution_mode.value),
         "",
-        "## Cloud Domain",
-        _fmt("Tier 1 (Read/List/Describe)", _CLOUD_TIER_1),
-        _fmt("Tier 2 (Start/Stop/Update)", _CLOUD_TIER_2),
-        _fmt("Tier 3 (Create/Delete)", _CLOUD_TIER_3),
+        "### Global Blocklist (always blocked, all modes)",
+        "OS: mkfs, fdisk, parted, dd, shred, wipefs, vi/vim/nano/emacs, fork bombs, "
+        "crontab -e/-r, useradd/userdel/usermod, passwd, visudo, iptables -F/-X, "
+        "nft flush, swapoff/swapon, block device writes",
+        "Cloud: gcloud projects delete, aws organizations close-account, "
+        "az group delete, kubectl delete namespace, terraform destroy, "
+        "pulumi destroy, --force/--quiet/--no-wait with destructive verbs",
         "",
-        "## FinOps Domain (billing, pricing, consumption)",
-        _fmt("Tier 1 (Read-Only)", _FINOPS_TIER_1),
-        _fmt("Tier 2 (Billing Links)", _FINOPS_TIER_2),
-        _fmt("Tier 3 (Billing Unlinks)", _FINOPS_TIER_3),
+        "### Mode Restrictions",
     ]
+
+    blocked = _MODE_BLOCKED_VERBS.get(mode_num, set())
+    if blocked:
+        mut = sorted(_MUTATING_VERBS & blocked)
+        dest = sorted(_DESTRUCTIVE_VERBS & blocked)
+        if mut:
+            sections.append(f"  Mutating verbs BLOCKED: {', '.join(mut)}")
+        if dest:
+            sections.append(f"  Destructive verbs BLOCKED: {', '.join(dest)}")
+    else:
+        sections.append("  No mode-specific verb restrictions (Mode 3 — all verbs allowed).")
+
+    sections.extend([
+        "",
+        "### What IS allowed",
+        "Any command that does NOT match the above blocklist patterns. "
+        "There is no approved-command list — agents are free to use any CLI tool, "
+        "subcommand, or utility as long as it doesn't hit a blocklist rule.",
+    ])
+
     return "\n".join(sections)
 
 
@@ -315,20 +552,26 @@ def get_allowlist_reference() -> str:
 # ══════════════════════════════════════════════════════════════
 
 def validate_command(command: str, domain: CommandDomain) -> ValidationResult:
-    """Validate a command against the tiered allowlists/blocklist for a domain.
+    """Validate a command using the blocklist-first pipeline.
 
-    Implements the three-stage flow:
-        1. Tiered Allowlist Classification
-        2. Blocklist check (regex) → reject if any pattern matches
-        3. Sanitization (injection detection) → reject if suspicious
+    The blocklist is the ONLY gate that rejects commands.
+    The Risk Signal Heuristic tags commands for downstream scrutiny
+    (LLM Gate, HITL) but never rejects.
+
+    Pipeline:
+        Stage 1:  Global Blocklist check → REJECT if match
+        Stage 1b: Mode Blocklist check → REJECT if action verb blocked in mode
+        Stage 2:  Risk Signal Heuristic → tag NONE/ELEVATED/CRITICAL
+        Stage 2.5: Horizontal API Translation (curl/python only)
+        Stage 3:  SSH inner-command validation
+        Stage 4:  Injection sanitization
 
     Args:
         command: The raw command string to validate.
         domain: Whether this is an OS or Cloud command.
 
     Returns:
-        A ``ValidationResult`` indicating approval or rejection with reason.
-        If approved, ``matched_tier`` is set to 1, 2, or 3.
+        A ``ValidationResult`` with risk_signal set if approved.
     """
     command = command.strip()
 
@@ -340,76 +583,18 @@ def validate_command(command: str, domain: CommandDomain) -> ValidationResult:
             reason="Empty command",
         )
 
-    # Select domain-specific lists
+    # Select domain-specific global blocklist
     if domain == CommandDomain.OS:
-        tiers = {1: _OS_TIER_1, 2: _OS_TIER_2, 3: _OS_TIER_3}
-        blocklist = _OS_BLOCKLIST_PATTERNS
+        global_blocklist = _GLOBAL_BLOCKLIST_OS
     else:
-        tiers = {1: _CLOUD_TIER_1, 2: _CLOUD_TIER_2, 3: _CLOUD_TIER_3}
-        blocklist = _CLOUD_BLOCKLIST_PATTERNS
+        global_blocklist = _GLOBAL_BLOCKLIST_CLOUD
 
-    # ── Stage 1: Tiered Allowlist Classification ───────────────────────
-    matched_tier = None
-    for tier_level, prefixes in tiers.items():
-        if any(command.startswith(prefix) for prefix in prefixes):
-            matched_tier = tier_level
-            break
-
-    # ── Stage 2.5: Horizontal API Translation ────────────────────────
-    # If the command did not match a CLI prefix but appears to be a raw script
-    if matched_tier is None and (command.startswith("python") or command.startswith("curl")):
-        endpoints = re.findall(r'https?://[^\s\'"]+', command)
-        
-        # AWS actions are usually strings in payloads or headers, not URLs.
-        aws_actions = re.findall(r'(Describe|List|Get|Simulate|FilterLogEvents|Start|Stop|Modify|Terminate|Delete|Create)[A-Za-z]+', command, re.IGNORECASE)
-        
-        combined_targets = endpoints + aws_actions
-        
-        if combined_targets:
-            highest_tier_required = 1
-            all_targets_allowed = True
-            has_destructive_methods = _detect_destructive_methods(command)
-            
-            for target in combined_targets:
-                target_allowed = False
-                for tier_level, patterns in _API_ALLOWLIST.items():
-                    if any(pattern.match(target) for pattern in patterns):
-                        target_allowed = True
-                        
-                        # If it's a destructive HTTP method, we automatically escalate Tier 1 (Read-Only) URLs to Tier 3 (Destructive)
-                        if has_destructive_methods and tier_level == 1:
-                            highest_tier_required = max(highest_tier_required, 3)
-                        else:
-                            highest_tier_required = max(highest_tier_required, tier_level)
-                        break
-                
-                if not target_allowed:
-                    logger.warning("Horizontal API Translation failed: target not allowed: '%s'", target)
-                    all_targets_allowed = False
-                    break
-            
-            if all_targets_allowed:
-                matched_tier = highest_tier_required
-                logger.info("Horizontal API Translation successful. Translated script to Tier %d based on targets: %s", matched_tier, combined_targets)
-
-    if matched_tier is None:
-        logger.warning(
-            "Command REJECTED (allowlist) | domain=%s cmd='%s'",
-            domain.value, command,
-        )
-        return ValidationResult(
-            status=ValidationStatus.NOT_ALLOWLISTED,
-            command=command,
-            domain=domain,
-            reason=f"Command does not match any allowlisted prefix for {domain.value} domain (Tiers 1-3)",
-        )
-
-    # ── Stage 2: Blocklist check ──────────────────────────────
-    for pattern in blocklist:
+    # ── Stage 1: Global Blocklist ──────────────────────────────
+    for pattern in global_blocklist:
         if pattern.search(command):
-            reason = f"Blocked by pattern: {pattern.pattern}"
+            reason = f"Globally blocked pattern: {pattern.pattern}"
             logger.warning(
-                "Command REJECTED (blocklist) | domain=%s cmd='%s' reason='%s'",
+                "Command REJECTED (global blocklist) | domain=%s cmd='%s' reason='%s'",
                 domain.value, command, reason,
             )
             return ValidationResult(
@@ -417,8 +602,59 @@ def validate_command(command: str, domain: CommandDomain) -> ValidationResult:
                 command=command,
                 domain=domain,
                 reason=reason,
-                matched_tier=matched_tier,
             )
+
+    # Cloud domain: check dangerous flag combos
+    if domain == CommandDomain.CLOUD:
+        flag_issue = _has_dangerous_flag_combo(command)
+        if flag_issue:
+            logger.warning(
+                "Command REJECTED (dangerous flag combo) | domain=%s cmd='%s' reason='%s'",
+                domain.value, command, flag_issue,
+            )
+            return ValidationResult(
+                status=ValidationStatus.BLOCKED,
+                command=command,
+                domain=domain,
+                reason=f"Globally blocked: {flag_issue}",
+            )
+
+    # ── Stage 1b: Mode Blocklist ───────────────────────────────
+    mode_num = int(str(settings.execution_mode)[-1])
+    blocked_verbs = _MODE_BLOCKED_VERBS.get(mode_num, set())
+
+    verb = _extract_action_verb(command)
+
+    if verb and verb in blocked_verbs:
+        reason = f"Verb '{verb}' is blocked in {settings.execution_mode.value}"
+        logger.warning(
+            "Command REJECTED (mode blocklist) | domain=%s mode=%s verb='%s' cmd='%s'",
+            domain.value, settings.execution_mode.value, verb, command,
+        )
+        return ValidationResult(
+            status=ValidationStatus.MODE_BLOCKED,
+            command=command,
+            domain=domain,
+            reason=reason,
+        )
+
+    # ── Stage 2: Risk Signal Heuristic ─────────────────────────
+    # For raw scripts (curl, python), use HTTP method analysis
+    if command.startswith("python") or command.startswith("curl"):
+        risk_signal = _assess_script_risk(command)
+        # Also check script endpoints against global blocklist
+        endpoints = re.findall(r'https?://[^\s\'"]+', command)
+        for endpoint in endpoints:
+            for pattern in _GLOBAL_BLOCKLIST_CLOUD:
+                if pattern.search(endpoint):
+                    return ValidationResult(
+                        status=ValidationStatus.BLOCKED,
+                        command=command,
+                        domain=domain,
+                        reason=f"Script targets globally blocked endpoint: {endpoint}",
+                    )
+    else:
+        risk_signal = _assess_risk_signal(command, verb)
 
     # ── Stage 3: SSH inner-command validation ──────────────────
     if domain == CommandDomain.OS and command.startswith("gcloud compute ssh"):
@@ -433,10 +669,10 @@ def validate_command(command: str, domain: CommandDomain) -> ValidationResult:
                 command=command,
                 domain=domain,
                 reason=ssh_issue,
-                matched_tier=matched_tier,
+                risk_signal=risk_signal,
             )
 
-    # ── Stage 4: Sanitization ─────────────────────────────────
+    # ── Stage 4: Injection Sanitization ────────────────────────
     sanitization_issue = _check_injection(command)
     if sanitization_issue:
         logger.warning(
@@ -448,20 +684,20 @@ def validate_command(command: str, domain: CommandDomain) -> ValidationResult:
             command=command,
             domain=domain,
             reason=sanitization_issue,
-            matched_tier=matched_tier,
+            risk_signal=risk_signal,
         )
 
     # ── All stages passed ─────────────────────────────────────
     logger.info(
-        "Command APPROVED | domain=%s tier=%d cmd='%s'",
-        domain.value, matched_tier, command,
+        "Command APPROVED | domain=%s risk=%s cmd='%s'",
+        domain.value, risk_signal.value, command,
     )
     return ValidationResult(
         status=ValidationStatus.APPROVED,
         command=command,
         domain=domain,
-        reason=f"Passed validation for Tier {matched_tier}",
-        matched_tier=matched_tier,
+        reason=f"Passed blocklist validation (risk: {risk_signal.value})",
+        risk_signal=risk_signal,
     )
 
 
@@ -504,7 +740,7 @@ def _validate_ssh_inner_command(command: str) -> str | None:
     """Validate the inner command payload of a gcloud compute ssh command.
 
     Extracts the ``--command="..."`` argument and validates it against
-    the OS blocklist.
+    the OS global blocklist and mode blocklist.
 
     Args:
         command: The full ``gcloud compute ssh ... --command="..."`` string.
@@ -513,7 +749,7 @@ def _validate_ssh_inner_command(command: str) -> str | None:
         A reason string if validation fails, ``None`` if the inner command is safe.
     """
     # Extract inner command from --command="..." or --command='...'
-    inner_match = re.search(r'--command=["\'](.+?)["\']', command)
+    inner_match = re.search(r'--command=["\'](.*?)["\']', command)
     if not inner_match:
         # No --command flag means interactive SSH — block it
         if "--command" not in command:
@@ -524,9 +760,16 @@ def _validate_ssh_inner_command(command: str) -> str | None:
     if not inner_cmd:
         return "Empty inner command in gcloud compute ssh"
 
-    # Validate the inner command against the OS blocklist
-    for pattern in _OS_BLOCKLIST_PATTERNS:
+    # Validate inner command against OS global blocklist
+    for pattern in _GLOBAL_BLOCKLIST_OS:
         if pattern.search(inner_cmd):
-            return f"SSH inner command blocked by OS blocklist: {pattern.pattern}"
+            return f"SSH inner command blocked by global blocklist: {pattern.pattern}"
+
+    # Validate inner command against mode blocklist
+    mode_num = int(str(settings.execution_mode)[-1])
+    blocked_verbs = _MODE_BLOCKED_VERBS.get(mode_num, set())
+    inner_verb = _extract_action_verb(inner_cmd)
+    if inner_verb and inner_verb in blocked_verbs:
+        return f"SSH inner command verb '{inner_verb}' is blocked in {settings.execution_mode.value}"
 
     return None

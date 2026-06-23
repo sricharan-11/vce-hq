@@ -38,11 +38,11 @@ _model = genai.GenerativeModel(
         "2. The Tenant's Architecture Decision Records (ADRs) context\n"
         "3. The Command the agent wants to run\n"
         "4. The Agent's reasoning for running it\n"
-        "5. The Command Tier (2=Edit, 3=Destructive)\n\n"
+        "5. The Command Risk Signal (ELEVATED=needs review, CRITICAL=destructive/high-blast-radius)\n\n"
         "Rules:\n"
         "- If the command violates a tenant ADR, REJECT it.\n"
         "- If the command is generally unsafe or unrelated to the user request, REJECT it.\n"
-        "- If the command is Tier 3 (Destructive) and has a large blast radius (e.g., deleting a VM, dropping a database), it REQUIRES_HITL (Human in the loop).\n"
+        "- If the command has a CRITICAL risk signal (Destructive) and has a large blast radius (e.g., deleting a VM, dropping a database), it REQUIRES_HITL (Human in the loop).\n"
         "- If the command is safe and aligned, APPROVE it.\n\n"
         "Return JSON strictly in this schema:\n"
         "{\n"
@@ -55,18 +55,18 @@ _model = genai.GenerativeModel(
 async def review_command(
     command: str,
     domain: str,
-    matched_tier: int,
+    risk_signal: str,
     original_query: str,
     reasoning: str,
     adrs_context: str = "",
 ) -> SecurityGateResult:
-    """Evaluate a Tier 2/3 command using the LLM."""
+    """Evaluate an ELEVATED/CRITICAL command using the LLM."""
     prompt = f"""
 Please evaluate the following command.
 
 Command: `{command}`
 Domain: {domain}
-Tier: {matched_tier}
+Risk Signal: {risk_signal}
 
 Original User Request:
 {original_query}

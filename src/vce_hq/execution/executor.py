@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from vce_hq.config import settings
-from vce_hq.execution.validator import CommandDomain, ValidationResult, validate_command
+from vce_hq.execution.validator import CommandDomain, ValidationResult, validate_command, RiskSignal
 from vce_hq.execution.security_gate import review_command, GateDecision
 
 logger = logging.getLogger(__name__)
@@ -164,33 +164,15 @@ class CommandExecutor:
                 truncated=False,
             )
 
-        matched_tier = validation.matched_tier
+        risk_signal = validation.risk_signal
 
-        # Check mode capability
-        if matched_tier and matched_tier > self._mode:
-            logger.warning(
-                "Command execution DENIED (Mode limitation) | agent=%s cmd='%s' tier=%s mode=%s",
-                self._agent, command, matched_tier, self._mode
-            )
-            return CommandResult(
-                command_id=command_id,
-                command=command,
-                agent=self._agent,
-                exit_code=-1,
-                stdout="",
-                stderr=f"DENIED: Current execution mode ({self._mode}) does not permit Tier {matched_tier} commands.",
-                duration_ms=0,
-                validated_by="mode_check_failed",
-                truncated=False,
-            )
-
-        # Pre-Execution Security Gate for Tier 2 and Tier 3
-        if not skip_gate and matched_tier and matched_tier >= 2:
-            logger.info("Triggering LLM Security Gate for Tier %d command", matched_tier)
+        # Pre-Execution Security Gate for ELEVATED and CRITICAL risk
+        if not skip_gate and risk_signal in (RiskSignal.ELEVATED, RiskSignal.CRITICAL):
+            logger.info("Triggering LLM Security Gate for %s risk command", risk_signal.value)
             gate_result = await review_command(
                 command=command,
                 domain=self._domain.value,
-                matched_tier=matched_tier,
+                risk_signal=risk_signal.value,
                 original_query=original_query,
                 reasoning=reasoning,
                 adrs_context=adrs_context,
@@ -297,7 +279,7 @@ class CommandExecutor:
                     stdout="",
                     stderr=f"TIMEOUT: Command exceeded {self._timeout}s limit",
                     duration_ms=duration_ms,
-                    validated_by="allowlist_v1",
+                    validated_by="blocklist_v1",
                     truncated=False,
                 )
 
@@ -316,7 +298,7 @@ class CommandExecutor:
                 stdout=stdout,
                 stderr=stderr,
                 duration_ms=duration_ms,
-                validated_by="allowlist_v1",
+                validated_by="blocklist_v1",
                 truncated=truncated,
             )
 
@@ -337,7 +319,7 @@ class CommandExecutor:
                 stdout="",
                 stderr=f"Command not found: {shlex.split(command)[0]}",
                 duration_ms=duration_ms,
-                validated_by="allowlist_v1",
+                validated_by="blocklist_v1",
                 truncated=False,
             )
         except Exception as e:
@@ -351,7 +333,7 @@ class CommandExecutor:
                 stdout="",
                 stderr=f"Execution error: {e}",
                 duration_ms=duration_ms,
-                validated_by="allowlist_v1",
+                validated_by="blocklist_v1",
                 truncated=False,
             )
 

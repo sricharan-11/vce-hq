@@ -123,7 +123,7 @@ class CommandExecution(BaseModel):
     stdout: str = ""
     stderr: str = ""
     duration_ms: int = 0
-    validated_by: str = "allowlist_v1"
+    validated_by: str = "blocklist_v1"
     truncated: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

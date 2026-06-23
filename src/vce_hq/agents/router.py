@@ -21,7 +21,7 @@ from vce_hq.config import settings
 from vce_hq.db.models import ConversationTurn, AgentType, TokenUsageRecord
 from vce_hq.db.short_term import ShortTermMemory
 from vce_hq.discovery.probe import EnvironmentProfile
-from vce_hq.execution.validator import get_allowlist_reference
+from vce_hq.execution.validator import get_blocklist_reference
 
 logger = logging.getLogger(__name__)
 
@@ -103,22 +103,21 @@ cloud_engineer to SSH.
 
 ## FALLBACK ROUTING — NEVER ACCEPT "NOT POSSIBLE"
 If an agent's output contains phrases like "not possible", "command rejected", \
-"VALIDATION FAILED", "not supported", "permission denied", "not in allowlist", \
+"VALIDATION FAILED", "not supported", "permission denied", "blocked", \
 or "I cannot" — DO NOT finalize the response.
 
 Instead:
-1. Consult the AVAILABLE COMMANDS reference below.
-2. Find an alternative command prefix that could achieve the same goal.
+1. Consult the BLOCKLIST CONSTRAINTS reference below to understand WHY it was blocked.
+2. Find an alternative command or diagnostic approach that achieves the same goal WITHOUT hitting a blocklist pattern.
 3. Re-delegate to the SAME agent (or a different one if the command belongs to another domain) \
-with an explicit instruction to use the specific alternative command.
-4. Only finalize (delegate to security_review) if there is truly NO alternative in the allowlist.
+with an explicit instruction to use the specific alternative approach.
+4. Only finalize (delegate to security_review) if there is truly NO unblocked alternative.
 
-Example: If finops_agent tried `gcloud billing info describe` and it was rejected, you \
-should see `gcloud billing accounts describe` in the available commands and re-delegate with: \
-"Use `gcloud billing accounts describe <ACCOUNT_ID>` to retrieve billing details."
+Example: If finops_agent tried `gcloud billing projects delete` and it was blocked by the global blocklist, you \
+should understand that deletion is strictly forbidden. Instruct the agent to gather billing info using read-only commands instead.
 
-## AVAILABLE COMMANDS
-{allowlist_ref}
+## BLOCKLIST CONSTRAINTS
+{blocklist_ref}
 
 You MUST respond with valid JSON only, no other text:
 {{
@@ -147,8 +146,8 @@ def create_router_node(
     # Build environment context string for prompt injection
     env_context = env_profile.to_prompt_context() if env_profile else ""
 
-    # Build the allowlist reference for fallback routing
-    allowlist_ref = get_allowlist_reference()
+    # Build the blocklist reference for fallback routing
+    blocklist_ref = get_blocklist_reference()
 
     llm = ChatGoogleGenerativeAI(
         model=settings.llm_model,
@@ -187,8 +186,8 @@ def create_router_node(
         iterations = state.get("router_iterations", 0) + 1
         max_iterations = settings.router_max_iterations
         
-        # Inject the dynamic allowlist reference into the prompt template
-        system_prompt = _ROUTER_SYSTEM_PROMPT.format(allowlist_ref=allowlist_ref)
+        # Inject the dynamic blocklist reference into the prompt template
+        system_prompt = _ROUTER_SYSTEM_PROMPT.format(blocklist_ref=blocklist_ref)
 
         messages = [
             ("system", system_prompt),
