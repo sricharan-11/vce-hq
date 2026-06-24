@@ -4,7 +4,7 @@ Specializes in Linux internals: kernel logs, systemd services,
 disk/memory/CPU diagnostics, networking (iptables, DNS, NIC),
 file systems, and package management.
 
-The agent follows the augmented ReAct pattern (PRD_Brain_v1.0 §4.1):
+The agent follows the augmented ReAct pattern (PRD_Brain_vB1.2 §5.1):
     1. RAG retrieval from LTM (unchanged from main PRD)
     2. LLM Reasoning — decide if enough data to diagnose
     3. If not: formulate a diagnostic command → validate → execute → loop
@@ -83,22 +83,15 @@ To run a command on a REMOTE VM, use this format:
 IMPORTANT: Check the ENVIRONMENT CONTEXT for the recommended SSH method and use the \
 correct flags accordingly. Always include --zone and --project flags.
 
-- The inner command (inside --command) must be read-only. No rm, kill, reboot, etc.
+- The inner command (inside --command) must be safe to run according to your assigned mode.
 - Interactive SSH (without --command) is NOT allowed.
 - If you need to inspect multiple VMs, run one SSH command per VM.
 
-ALLOWED COMMANDS (read-only only):
-- System: uname, uptime, hostnamectl, timedatectl
-- CPU: top -bn1, mpstat, pidstat, cat /proc/loadavg, nproc
-- Memory: free, vmstat, cat /proc/meminfo, slabtop -o
-- Disk: df, du -sh, lsblk, blkid, iostat, cat /proc/mounts, findmnt
-- Processes: ps, pstree, cat /proc/<pid>/*, ls /proc/
-- Network: ss, ip addr, ip route, ip link, cat /etc/resolv.conf, iptables -L, netstat
-- Logs: journalctl, dmesg, tail, head, cat /var/log/*, grep
-- Systemd: systemctl status, systemctl list-units, systemctl show, systemctl is-active
-- Kernel: sysctl, lsmod, modinfo
-- Misc: whoami, id, w, who, lscpu, lsmem, lsof, ulimit, getconf, env
-- Remote: gcloud compute ssh <instance> --command="<any read-only command above>"
+ALLOWED COMMANDS:
+You can use any OS commands. The system's blocklist and current Execution Mode will automatically determine if a command is permitted, requires LLM Security Gate review, or requires Human-in-the-Loop (HITL) approval.
+- In Mode 1 (Read-Only): Mutating and destructive verbs are blocked.
+- In Mode 2 (Read+Edit): Destructive verbs are blocked. Mutating verbs (e.g., restart, chmod) are allowed but reviewed.
+- In Mode 3 (Full Access): All verbs allowed except globally blocked patterns (e.g. mkfs, fdisk).
 
 You may pipe output through grep, awk, sed, sort, head, tail, wc, cut, tr for filtering.
 

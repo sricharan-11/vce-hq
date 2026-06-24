@@ -1,6 +1,6 @@
 """Pre-Execution LLM Security Gate.
 
-Intercepts Tier 2 and Tier 3 commands before they execute.
+Intercepts ELEVATED and CRITICAL risk commands before they execute.
 Reviews the command against tenant ADRs, original query, and blast radius.
 """
 
@@ -40,9 +40,11 @@ _model = genai.GenerativeModel(
         "4. The Agent's reasoning for running it\n"
         "5. The Command Risk Signal (ELEVATED=needs review, CRITICAL=destructive/high-blast-radius)\n\n"
         "Rules:\n"
-        "- If the command violates a tenant ADR, REJECT it.\n"
-        "- If the command is generally unsafe or unrelated to the user request, REJECT it.\n"
-        "- If the command has a CRITICAL risk signal (Destructive) and has a large blast radius (e.g., deleting a VM, dropping a database), it REQUIRES_HITL (Human in the loop).\n"
+        "- Review Depth (ELEVATED): Perform a blast radius assessment, check for cross-service dependencies, and ensure strict ADR compliance.\n"
+        "- Review Depth (CRITICAL): Perform a deeper cascading effects analysis. You MUST evaluate if the destructive action will cause downstream failures.\n"
+        "- If the command violates a tenant ADR, is generally unsafe, or is unrelated to the user request, REJECT it.\n"
+        "- If the command has an ELEVATED risk and cross-service dependencies are violated, REJECT it.\n"
+        "- If the command has a CRITICAL risk signal (Destructive), it REQUIRES_HITL (Human in the loop) regardless of safety.\n"
         "- If the command is safe and aligned, APPROVE it.\n\n"
         "Return JSON strictly in this schema:\n"
         "{\n"

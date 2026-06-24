@@ -351,8 +351,9 @@ class ShortTermMemory:
             INSERT INTO command_executions (
                 command_id, session_id, request_id, agent, command, reasoning,
                 exit_code, stdout, stderr, duration_ms,
-                validated_by, truncated, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                validated_by, risk_signal, gate_invoked, gate_decision,
+                truncated, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 execution.command_id,
@@ -366,6 +367,9 @@ class ShortTermMemory:
                 execution.stderr,
                 execution.duration_ms,
                 execution.validated_by,
+                execution.risk_signal,
+                int(execution.gate_invoked),
+                execution.gate_decision,
                 int(execution.truncated),
                 execution.created_at.isoformat(),
             ),
@@ -400,6 +404,9 @@ class ShortTermMemory:
                 stderr=row["stderr"] or "",
                 duration_ms=row["duration_ms"],
                 validated_by=row["validated_by"],
+                risk_signal=row["risk_signal"] if "risk_signal" in row.keys() else "none",
+                gate_invoked=bool(row["gate_invoked"]) if "gate_invoked" in row.keys() else False,
+                gate_decision=row["gate_decision"] if "gate_decision" in row.keys() else "",
                 truncated=bool(row["truncated"]),
                 created_at=datetime.fromisoformat(row["created_at"]),
             )

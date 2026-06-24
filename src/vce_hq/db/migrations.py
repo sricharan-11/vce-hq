@@ -51,6 +51,10 @@ def _retroactive_migrations(conn: sqlite3.Connection) -> None:
     add_col("conversation_turns", "request_id", "TEXT")
     add_col("command_executions", "request_id", "TEXT")
     add_col("token_usage", "request_id", "TEXT")
+    # Blocklist audit trail (PRD §8)
+    add_col("command_executions", "risk_signal", "TEXT DEFAULT 'none'")
+    add_col("command_executions", "gate_invoked", "INTEGER DEFAULT 0")
+    add_col("command_executions", "gate_decision", "TEXT DEFAULT ''")
 
 
 def _create_stm_tables(conn: sqlite3.Connection) -> None:

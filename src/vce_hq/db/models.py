@@ -124,6 +124,9 @@ class CommandExecution(BaseModel):
     stderr: str = ""
     duration_ms: int = 0
     validated_by: str = "blocklist_v1"
+    risk_signal: str = "none"  # NONE / ELEVATED / CRITICAL
+    gate_invoked: bool = False  # Whether the LLM Security Gate was invoked
+    gate_decision: str = ""  # approved / rejected / requires_hitl / "" if gate not invoked
     truncated: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

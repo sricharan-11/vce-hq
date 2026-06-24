@@ -106,6 +106,8 @@ _GLOBAL_BLOCKLIST_OS: list[re.Pattern[str]] = [
     re.compile(r"\bnft\s+flush\b", re.IGNORECASE),
     # Swap manipulation
     re.compile(r"\b(swapoff|swapon)\b", re.IGNORECASE),
+    # Mount manipulation (as action verb — not in /proc/mounts or findmnt context)
+    re.compile(r"^\s*mount\s", re.IGNORECASE),
 ]
 
 _GLOBAL_BLOCKLIST_CLOUD: list[re.Pattern[str]] = [
@@ -318,7 +320,7 @@ _READ_ONLY_OS_UTILITIES: set[str] = {
     "whoami", "id", "w", "who", "last", "lastlog",
     "date", "cal", "env", "printenv",
     "sysctl", "lsmod", "modinfo",
-    "dpkg", "apt-cache", "rpm", "yum", "mount", "ulimit", "getconf",
+    "dpkg", "apt-cache", "rpm", "yum", "ulimit", "getconf",
     "ls",
 }
 
@@ -722,7 +724,7 @@ def _check_injection(command: str) -> str | None:
                 continue
             # Check if the pipe target is a safe filter command
             if not any(segment.startswith(safe) for safe in _SAFE_PIPE_TARGETS):
-                return f"Pipe to non-allowlisted command: '{segment.split()[0]}'"
+                return f"Pipe to non-permitted command: '{segment.split()[0]}'"
 
     # Check other injection patterns
     for pattern in _INJECTION_PATTERNS:

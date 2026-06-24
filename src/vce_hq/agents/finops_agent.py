@@ -4,7 +4,7 @@ Specializes in cloud consumption tracking, billing analysis, cost
 optimization, budget allocation, and acting as the "ruthless paranoid CFO".
 Tracks hourly/daily/monthly patterns and maps bill differences to workload.
 
-Follows the augmented ReAct pattern (PRD_Brain_v1.0 §4.1).
+Follows the augmented ReAct pattern (PRD_Brain_vB1.2 §5.1).
 """
 
 import json
@@ -67,17 +67,17 @@ To request a command, include EXACTLY this JSON block in your response:
 {"action": "execute_command", "command": "<your command>", "reasoning": "<why you need this>"}
 ```
 
-ALLOWED COMMANDS (read-only only):
-- AWS: aws ce *, aws ec2 describe-*, aws s3 ls
-- GCP: gcloud billing *, gcloud compute instances list, gcloud container clusters list
-- ONLY read/list/describe/show/get subcommands are permitted.
-- NEVER request create/delete/update/modify/stop/start commands.
+ALLOWED COMMANDS:
+You can use billing and cost analysis CLI commands. The system's blocklist and current Execution Mode will automatically determine if a command is permitted.
+- In Mode 1 & 2: Mutating/destructive billing commands are blocked.
+- In Mode 3 (Full Access): Destructive billing commands (e.g., unlink) are allowed with HITL approval.
+- NOTE: You do NOT execute infrastructure shutdowns directly. If resources must be deleted to save money, instruct the Supervisor Router to delegate the deletion to the Cloud Engineer.
 
 RULES:
 - Be ruthless about cost. If a resource is idle, flag it for deletion.
 - If you lack business vertical or P&L data to determine the ideal budget, explicitly note this gap so the Supervisor can ask the user.
 - Maximum 5 command iterations — use them efficiently.
-- You CANNOT SSH into VMs or You cannot edit anything in the environment.
+- You CANNOT SSH into VMs. For infrastructure shutdowns, instruct the Supervisor Router to delegate to the Cloud Engineer.
 
 ## RESPONSE FORMAT
 

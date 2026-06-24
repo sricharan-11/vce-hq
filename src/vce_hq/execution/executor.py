@@ -1,7 +1,7 @@
 """Sandboxed command executor.
 
 Executes validated commands via subprocess (local) or SSH (remote hosts).
-Implements the execution constraints from PRD_Brain_v1.0 §7.2:
+Implements the execution constraints from PRD_Brain_vB1.2 §7:
     - Per-command timeout (default: 30s)
     - Output size limits (stdout: 64KB, stderr: 16KB)
     - Tail-truncation for oversized output
@@ -57,6 +57,9 @@ class CommandResult:
     duration_ms: int
     validated_by: str
     truncated: bool
+    risk_signal: str = "none"
+    gate_invoked: bool = False
+    gate_decision: str = ""
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> dict:
@@ -71,6 +74,9 @@ class CommandResult:
             "duration_ms": self.duration_ms,
             "validated_by": self.validated_by,
             "truncated": self.truncated,
+            "risk_signal": self.risk_signal,
+            "gate_invoked": self.gate_invoked,
+            "gate_decision": self.gate_decision,
             "timestamp": self.timestamp.isoformat(),
         }
 
@@ -78,7 +84,7 @@ class CommandResult:
 class CommandExecutor:
     """Sandboxed command execution engine.
 
-    Validates commands via the allowlist/blocklist system, executes them
+    Validates commands via the blocklist system, executes them
     with strict timeouts and output limits, and returns structured results.
 
     Args:
@@ -120,7 +126,7 @@ class CommandExecutor:
         """Validate and execute a command.
 
         The full flow:
-            1. Validate against allowlist/blocklist
+            1. Validate against blocklist system
             2. Execute as subprocess with timeout
             3. Capture and truncate output
             4. Return structured result
@@ -162,6 +168,7 @@ class CommandExecutor:
                 duration_ms=0,
                 validated_by=f"{validation.status.value}",
                 truncated=False,
+                risk_signal=validation.risk_signal.value,
             )
 
         risk_signal = validation.risk_signal
@@ -193,6 +200,9 @@ class CommandExecutor:
                     duration_ms=0,
                     validated_by="security_gate_rejected",
                     truncated=False,
+                    risk_signal=risk_signal.value,
+                    gate_invoked=True,
+                    gate_decision=gate_result.decision.value,
                 )
                 
             if gate_result.decision == GateDecision.REQUIRES_HITL:
@@ -210,6 +220,9 @@ class CommandExecutor:
                     duration_ms=0,
                     validated_by="security_gate_hitl",
                     truncated=False,
+                    risk_signal=risk_signal.value,
+                    gate_invoked=True,
+                    gate_decision=gate_result.decision.value,
                 )
 
         # ── Stage 2: Execute ──────────────────────────────────
@@ -279,8 +292,11 @@ class CommandExecutor:
                     stdout="",
                     stderr=f"TIMEOUT: Command exceeded {self._timeout}s limit",
                     duration_ms=duration_ms,
-                    validated_by="blocklist_v1",
+                    validated_by="blocklist_pass" if risk_signal == RiskSignal.NONE else "security_gate_approved",
                     truncated=False,
+                    risk_signal=risk_signal.value,
+                    gate_invoked=risk_signal in (RiskSignal.ELEVATED, RiskSignal.CRITICAL) and not skip_gate,
+                    gate_decision="approved" if (risk_signal in (RiskSignal.ELEVATED, RiskSignal.CRITICAL) and not skip_gate) else "",
                 )
 
             duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -290,6 +306,7 @@ class CommandExecutor:
                 raw_stdout, raw_stderr
             )
 
+            gate_was_invoked = risk_signal in (RiskSignal.ELEVATED, RiskSignal.CRITICAL) and not skip_gate
             result = CommandResult(
                 command_id=command_id,
                 command=command,
@@ -298,8 +315,11 @@ class CommandExecutor:
                 stdout=stdout,
                 stderr=stderr,
                 duration_ms=duration_ms,
-                validated_by="blocklist_v1",
+                validated_by="blocklist_pass" if not gate_was_invoked else "security_gate_approved",
                 truncated=truncated,
+                risk_signal=risk_signal.value,
+                gate_invoked=gate_was_invoked,
+                gate_decision="approved" if gate_was_invoked else "",
             )
 
             logger.info(
@@ -319,8 +339,9 @@ class CommandExecutor:
                 stdout="",
                 stderr=f"Command not found: {shlex.split(command)[0]}",
                 duration_ms=duration_ms,
-                validated_by="blocklist_v1",
+                validated_by="blocklist_pass",
                 truncated=False,
+                risk_signal=risk_signal.value,
             )
         except Exception as e:
             duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -333,8 +354,9 @@ class CommandExecutor:
                 stdout="",
                 stderr=f"Execution error: {e}",
                 duration_ms=duration_ms,
-                validated_by="blocklist_v1",
+                validated_by="blocklist_pass",
                 truncated=False,
+                risk_signal=risk_signal.value,
             )
 
     def _truncate_output(

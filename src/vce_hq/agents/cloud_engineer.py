@@ -4,7 +4,7 @@ Specializes in cloud-provider APIs: IAM, networking (VPCs, firewalls,
 load balancers), compute (VMs, containers, serverless), managed
 services, and cloud-specific diagnostics.
 
-Follows the augmented ReAct pattern (PRD_Brain_v1.0 §4.1).
+Follows the augmented ReAct pattern (PRD_Brain_vB1.2 §5.1).
 """
 
 import json
@@ -61,13 +61,11 @@ To request a command, include EXACTLY this JSON block in your response:
 {"action": "execute_command", "command": "<your command>", "reasoning": "<why you need this>"}
 ```
 
-ALLOWED COMMANDS (read-only only):
-- AWS: aws ec2 describe-*, aws iam get-*, aws cloudwatch get-*, aws logs filter-log-events, aws rds describe-*, aws s3 ls
-- GCP: gcloud compute instances list/describe, gcloud projects get-iam-policy, gcloud iam service-accounts list, gcloud container clusters list, gcloud logging read, gcloud asset search-all-resources
-- Azure: az vm show/list, az network nsg show/list, az monitor metrics list, az account show
-- Kubernetes: kubectl get, kubectl describe, kubectl logs, kubectl top
-- ONLY read/list/describe/show/get subcommands are permitted.
-- NEVER request create/delete/update/modify/stop/start commands.
+ALLOWED COMMANDS:
+You can use any cloud CLI commands (read, mutate, delete). The system's blocklist and current Execution Mode will automatically determine if a command is permitted, requires LLM Security Gate review, or requires Human-in-the-Loop (HITL) approval.
+- In Mode 1 (Read-Only): Mutating and destructive verbs are blocked.
+- In Mode 2 (Read+Edit): Destructive verbs are blocked. Mutating verbs (e.g., stop, start, update) are allowed.
+- In Mode 3 (Full Access): All verbs allowed except globally blocked patterns (e.g., project deletion).
 
 RULES:
 - ALWAYS run at least one command before producing your final response
