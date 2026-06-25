@@ -483,35 +483,35 @@ def _build_messages(
     if not cache_name:
         messages.extend([
             ("system", _OS_SYSTEM_PROMPT),
-            ("system", f"IMPORTANT: You are currently operating in {settings.execution_mode}."),
+            ("human", f"IMPORTANT: You are currently operating in {settings.execution_mode}."),
         ])
         if env_context:
             messages.append(("system", env_context))
     else:
         # If cached, we still need to remind it of execution mode which might be dynamic,
         # but since it's typically static, we could cache it. For now we append it dynamically.
-        messages.append(("system", f"IMPORTANT: You are currently operating in {settings.execution_mode}."))
+        messages.append(("human", f"IMPORTANT: You are currently operating in {settings.execution_mode}."))
 
     if state.get("router_instruction"):
         messages.append(
-            ("system", f"The Supervisor Router has assigned you this task:\n{state['router_instruction']}")
+            ("human", f"The Supervisor Router has assigned you this task:\n{state['router_instruction']}")
         )
 
     if state.get("conversation_history"):
         messages.append(
-            ("system", f"Conversation history:\n{state['conversation_history']}")
+            ("human", f"Conversation history:\n{state['conversation_history']}")
         )
 
     if context:
         messages.append(
-            ("system", f"Retrieved context from tenant knowledge base:\n{context}")
+            ("human", f"Retrieved context from tenant knowledge base:\n{context}")
         )
 
     if command_outputs:
         combined = "\n\n".join(command_outputs)
         remaining = max_iterations - iteration
         messages.append(
-            ("system",
+            ("human",
              f"Previous diagnostic command results:\n{combined}\n\n"
              f"Remaining command iterations: {remaining}")
         )

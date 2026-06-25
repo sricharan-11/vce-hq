@@ -201,11 +201,11 @@ def create_security_review_node(
         if not cache_name:
             messages.append(("system", _SECURITY_REVIEW_PROMPT))
         
-        messages.append(("system", f"IMPORTANT: The agents operated in {settings.execution_mode}. Ensure their actions did not exceed this mode's capabilities."))
+        messages.append(("human", f"IMPORTANT: The agents operated in {settings.execution_mode}. Ensure their actions did not exceed this mode's capabilities."))
 
         if context:
             messages.append(
-                ("system",
+                ("human",
                  f"Tenant's long-term memory (ADRs, past decisions, standards):\n{context}")
             )
 

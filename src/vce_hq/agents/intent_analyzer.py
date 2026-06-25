@@ -112,7 +112,7 @@ def create_intent_analyzer_node(conn: sqlite3.Connection, embedding_service: Any
                 messages.append(("system", env_profile.to_prompt_context()))
             
         if recent_conversation:
-            messages.append(("system", f"Recent conversation history:\n{recent_conversation}"))
+            messages.append(("human", f"Recent conversation history:\n{recent_conversation}"))
         messages.append(("human", f"USER QUERY: {user_query}"))
 
         try:

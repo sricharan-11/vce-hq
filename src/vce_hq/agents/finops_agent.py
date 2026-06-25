@@ -383,27 +383,27 @@ def _build_messages(
     if not cache_name:
         messages.extend([
             ("system", _FINOPS_SYSTEM_PROMPT),
-            ("system", f"IMPORTANT: You are currently operating in {settings.execution_mode}."),
+            ("human", f"IMPORTANT: You are currently operating in {settings.execution_mode}."),
         ])
         if env_context:
             messages.append(("system", env_context))
     else:
-        messages.append(("system", f"IMPORTANT: You are currently operating in {settings.execution_mode}."))
+        messages.append(("human", f"IMPORTANT: You are currently operating in {settings.execution_mode}."))
     if state.get("router_instruction"):
-        messages.append(("system", f"The Supervisor Router has assigned you this task:\n{state['router_instruction']}"))
+        messages.append(("human", f"The Supervisor Router has assigned you this task:\n{state['router_instruction']}"))
     if state.get("conversation_history"):
-        messages.append(("system", f"Conversation history:\n{state['conversation_history']}"))
+        messages.append(("human", f"Conversation history:\n{state['conversation_history']}"))
     if context:
-        messages.append(("system", f"Retrieved context from tenant knowledge base:\n{context}"))
+        messages.append(("human", f"Retrieved context from tenant knowledge base:\n{context}"))
     if state.get("cloud_analysis"):
-        messages.append(("system", f"Cloud Engineer Output:\n{state['cloud_analysis']}"))
+        messages.append(("human", f"Cloud Engineer Output:\n{state['cloud_analysis']}"))
     if state.get("os_analysis"):
-        messages.append(("system", f"OS Engineer Output:\n{state['os_analysis']}"))
+        messages.append(("human", f"OS Engineer Output:\n{state['os_analysis']}"))
     
     if command_outputs:
         combined = "\n\n".join(command_outputs)
         remaining = max_iterations - iteration
-        messages.append(("system", f"Previous diagnostic command results:\n{combined}\n\nRemaining iterations: {remaining}"))
+        messages.append(("human", f"Previous diagnostic command results:\n{combined}\n\nRemaining iterations: {remaining}"))
     return messages
 
 

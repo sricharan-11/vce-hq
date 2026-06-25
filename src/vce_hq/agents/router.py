@@ -209,20 +209,20 @@ def create_router_node(
                 messages.append(("system", env_context))
 
         if conversation:
-            messages.append(("system", f"Previous conversation context:\n{conversation}"))
+            messages.append(("human", f"Previous conversation context:\n{conversation}"))
         
         messages.append(
-            ("system", 
+            ("human", 
              f"You are on iteration {iterations} out of {max_iterations}. "
              f"If this is your last iteration, you MUST delegate to 'security_review'.")
         )
             
         if state.get("os_analysis"):
-            messages.append(("system", f"OS Engineer Output:\n{state['os_analysis']}"))
+            messages.append(("human", f"OS Engineer Output:\n{state['os_analysis']}"))
         if state.get("cloud_analysis"):
-            messages.append(("system", f"Cloud Engineer Output:\n{state['cloud_analysis']}"))
+            messages.append(("human", f"Cloud Engineer Output:\n{state['cloud_analysis']}"))
         if state.get("finops_analysis"):
-            messages.append(("system", f"FinOps Agent Output:\n{state['finops_analysis']}"))
+            messages.append(("human", f"FinOps Agent Output:\n{state['finops_analysis']}"))
 
         messages.append(("human", user_message))
 
