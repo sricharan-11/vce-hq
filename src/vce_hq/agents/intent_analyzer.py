@@ -21,6 +21,7 @@ from vce_hq.agents.state import AgentState
 from vce_hq.config import settings
 from vce_hq.db.models import AgentType, TokenUsageRecord
 from vce_hq.db.short_term import ShortTermMemory
+from vce_hq.cache_manager import cache_manager
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +44,16 @@ infrastructure operations. Did you mean to ask about 'baking' new AMI images or 
 deployment pipeline?"). If the query is just a generic greeting ("hi", "hello"), you can ask \
 "Hello! How can I help you with your cloud infrastructure today?"
 
+## ENTITY RESOLUTION
+Users often use shorthand names for projects, VMs, or apps (e.g. "cart" instead of "lowerground_cart_app", or "abc" for "abc-dev-002-mumbai"). 
+Cross-reference the user's query with the provided Environment Profile. If you detect any shorthand, map it to the exact full name.
+
 Respond with valid JSON only:
 {
   "intent": "CONTINUATION" | "NEW_TOPIC" | "IRRELEVANT",
   "reasoning": "Brief explanation of why you classified it this way",
-  "clarifying_question": "Required only if intent is IRRELEVANT. A polite question redirecting to infra."
+  "clarifying_question": "Required only if intent is IRRELEVANT. A polite question redirecting to infra.", If it's already relevant and you lack some calrity you can ask it back to the user. 
+  "resolved_query": "The original user query with all shorthand names expanded to their full exact names from the Environment Profile. If no shorthand was used, return the original query."
 }
 """
 
@@ -62,11 +68,22 @@ def create_intent_analyzer_node(conn: sqlite3.Connection, embedding_service: Any
     Returns:
         An async function compatible with LangGraph's node signature.
     """
-    llm = ChatGoogleGenerativeAI(
-        model=settings.llm_model,
-        google_api_key=settings.google_api_key,
-        temperature=0.0,
+    env_context = env_profile.to_prompt_context() if env_profile else ""
+    cache_name = cache_manager.get_or_create_cache(
+        model_name=settings.llm_model,
+        system_prompt=_INTENT_SYSTEM_PROMPT,
+        env_context=env_context,
     )
+
+    llm_kwargs = {
+        "model": settings.llm_model,
+        "google_api_key": settings.google_api_key,
+        "temperature": 0.0,
+    }
+    if cache_name:
+        llm_kwargs["cached_content"] = cache_name
+
+    llm = ChatGoogleGenerativeAI(**llm_kwargs)
     stm = ShortTermMemory(conn)
 
     async def intent_analyzer_node(state: AgentState) -> AgentState:
@@ -88,7 +105,12 @@ def create_intent_analyzer_node(conn: sqlite3.Connection, embedding_service: Any
         # Pull chronological recent history (last 2-3 turns) just for intent detection
         recent_conversation = stm.get_recent_conversation_text(session_id, limit=3) if session_id else ""
 
-        messages = [("system", _INTENT_SYSTEM_PROMPT)]
+        messages = []
+        if not cache_name:
+            messages.append(("system", _INTENT_SYSTEM_PROMPT))
+            if env_profile:
+                messages.append(("system", env_profile.to_prompt_context()))
+            
         if recent_conversation:
             messages.append(("system", f"Recent conversation history:\n{recent_conversation}"))
         messages.append(("human", f"USER QUERY: {user_query}"))
@@ -138,8 +160,14 @@ def create_intent_analyzer_node(conn: sqlite3.Connection, embedding_service: Any
             intent = result.get("intent", "NEW_TOPIC")
             reasoning = result.get("reasoning", "No reasoning provided")
             clarifying_question = result.get("clarifying_question", "")
+            resolved_query = result.get("resolved_query", user_query)
             
-            logger.info("Intent Analyzer classified query as %s: %s", intent, reasoning)
+            # Apply the resolved query (fuzzy matching result) for downstream agents
+            if resolved_query and resolved_query != user_query:
+                logger.info("Entity Resolution: Mapped '%s' -> '%s'", user_query, resolved_query)
+                state["user_query"] = resolved_query
+                
+            logger.info("Intent: %s. Reasoning: %s", intent, reasoning)
 
             # CRITICAL FIX: Unconditionally clear transient agent outputs from the previous turn
             # so they don't bleed into the current turn's security_review, regardless of intent.

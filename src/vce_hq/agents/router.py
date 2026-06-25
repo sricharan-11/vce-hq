@@ -21,7 +21,9 @@ from vce_hq.config import settings
 from vce_hq.db.models import ConversationTurn, AgentType, TokenUsageRecord
 from vce_hq.db.short_term import ShortTermMemory
 from vce_hq.discovery.probe import EnvironmentProfile
+from vce_hq.discovery.probe import EnvironmentProfile
 from vce_hq.execution.validator import get_blocklist_reference
+from vce_hq.cache_manager import cache_manager
 
 logger = logging.getLogger(__name__)
 
@@ -148,12 +150,24 @@ def create_router_node(
 
     # Build the blocklist reference for fallback routing
     blocklist_ref = get_blocklist_reference()
+    system_instructions = _ROUTER_SYSTEM_PROMPT.format(blocklist_ref=blocklist_ref)
 
-    llm = ChatGoogleGenerativeAI(
-        model=settings.llm_model,
-        google_api_key=settings.google_api_key,
-        temperature=0.0,  # Deterministic orchestration
+    # Attempt to get or create a context cache
+    cache_name = cache_manager.get_or_create_cache(
+        model_name=settings.llm_model,
+        system_prompt=system_instructions,
+        env_context=env_context,
     )
+
+    llm_kwargs = {
+        "model": settings.llm_model,
+        "google_api_key": settings.google_api_key,
+        "temperature": 0.0,
+    }
+    if cache_name:
+        llm_kwargs["cached_content"] = cache_name
+
+    llm = ChatGoogleGenerativeAI(**llm_kwargs)
     stm = ShortTermMemory(conn)
 
     async def router_node(state: AgentState) -> AgentState:
@@ -186,23 +200,22 @@ def create_router_node(
         iterations = state.get("router_iterations", 0) + 1
         max_iterations = settings.router_max_iterations
         
-        # Inject the dynamic blocklist reference into the prompt template
-        system_prompt = _ROUTER_SYSTEM_PROMPT.format(blocklist_ref=blocklist_ref)
+        # Inject the dynamic blocklist reference into the
+        # System instructions (only included if not cached)
+        messages = []
+        if not cache_name:
+            messages.append(("system", system_instructions))
+            if env_context:
+                messages.append(("system", env_context))
 
-        messages = [
-            ("system", system_prompt),
-        ]
+        if conversation:
+            messages.append(("system", f"Previous conversation context:\n{conversation}"))
         
         messages.append(
             ("system", 
-             f"You are on Router iteration {iterations}/{max_iterations}. "
+             f"You are on iteration {iterations} out of {max_iterations}. "
              f"If this is your last iteration, you MUST delegate to 'security_review'.")
         )
-        
-        if env_context:
-            messages.append(("system", env_context))
-        if conversation:
-            messages.append(("system", f"Previous conversation context:\n{conversation}"))
             
         if state.get("os_analysis"):
             messages.append(("system", f"OS Engineer Output:\n{state['os_analysis']}"))

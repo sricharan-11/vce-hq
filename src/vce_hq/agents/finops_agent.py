@@ -24,6 +24,7 @@ from vce_hq.execution.validator import CommandDomain
 from vce_hq.vault.credential_resolver import resolve_credentials
 from vce_hq.vault.manager import CredentialManager
 from vce_hq.discovery.probe import EnvironmentProfile
+from vce_hq.cache_manager import cache_manager
 
 logger = logging.getLogger(__name__)
 
@@ -121,11 +122,22 @@ def create_finops_agent_node(
         An async function compatible with LangGraph's node signature.
     """
     env_context = env_profile.to_prompt_context() if env_profile else ""
-    llm = ChatGoogleGenerativeAI(
-        model=settings.llm_model,
-        google_api_key=settings.google_api_key,
-        temperature=0.2,
+    # Attempt to get or create a context cache
+    cache_name = cache_manager.get_or_create_cache(
+        model_name=settings.llm_model,
+        system_prompt=_FINOPS_SYSTEM_PROMPT,
+        env_context=env_context,
     )
+
+    llm_kwargs = {
+        "model": settings.llm_model,
+        "google_api_key": settings.google_api_key,
+        "temperature": 0.2,
+    }
+    if cache_name:
+        llm_kwargs["cached_content"] = cache_name
+
+    llm = ChatGoogleGenerativeAI(**llm_kwargs)
 
     stm = ShortTermMemory(conn)
 
@@ -178,7 +190,7 @@ def create_finops_agent_node(
                 iteration, max_iterations, session_id,
             )
 
-            messages = _build_messages(state, context, command_outputs, iteration, max_iterations, env_context)
+            messages = _build_messages(state, context, command_outputs, iteration, max_iterations, env_context, cache_name)
             messages.append(("human", query))
 
             try:
@@ -297,7 +309,7 @@ def create_finops_agent_node(
 
         logger.warning("FinOps Agent: max iterations reached for session %s", session_id)
         final_messages = _build_messages(
-            state, context, command_outputs, max_iterations + 1, max_iterations, env_context,
+            state, context, command_outputs, max_iterations + 1, max_iterations, env_context, cache_name
         )
         final_messages.append((
             "human",
@@ -365,13 +377,18 @@ def _build_messages(
     iteration: int,
     max_iterations: int,
     env_context: str = "",
+    cache_name: str | None = None,
 ) -> list[tuple[str, str]]:
-    messages: list[tuple[str, str]] = [
-        ("system", _FINOPS_SYSTEM_PROMPT),
-        ("system", f"IMPORTANT: You are currently operating in {settings.execution_mode}."),
-    ]
-    if env_context:
-        messages.append(("system", env_context))
+    messages: list[tuple[str, str]] = []
+    if not cache_name:
+        messages.extend([
+            ("system", _FINOPS_SYSTEM_PROMPT),
+            ("system", f"IMPORTANT: You are currently operating in {settings.execution_mode}."),
+        ])
+        if env_context:
+            messages.append(("system", env_context))
+    else:
+        messages.append(("system", f"IMPORTANT: You are currently operating in {settings.execution_mode}."))
     if state.get("router_instruction"):
         messages.append(("system", f"The Supervisor Router has assigned you this task:\n{state['router_instruction']}"))
     if state.get("conversation_history"):

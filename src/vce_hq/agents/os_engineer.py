@@ -29,6 +29,7 @@ from vce_hq.execution.validator import CommandDomain
 from vce_hq.vault.credential_resolver import resolve_credentials
 from vce_hq.vault.manager import CredentialManager
 from vce_hq.discovery.probe import EnvironmentProfile
+from vce_hq.cache_manager import cache_manager
 
 logger = logging.getLogger(__name__)
 
@@ -158,11 +159,22 @@ def create_os_engineer_node(
     """
     # Build environment context string for prompt injection
     env_context = env_profile.to_prompt_context() if env_profile else ""
-    llm = ChatGoogleGenerativeAI(
-        model=settings.llm_model,
-        google_api_key=settings.google_api_key,
-        temperature=0.2,  # Slight creativity for diagnosis
+    # Attempt to get or create a context cache
+    cache_name = cache_manager.get_or_create_cache(
+        model_name=settings.llm_model,
+        system_prompt=_OS_SYSTEM_PROMPT,
+        env_context=env_context,
     )
+
+    llm_kwargs = {
+        "model": settings.llm_model,
+        "google_api_key": settings.google_api_key,
+        "temperature": 0.2,
+    }
+    if cache_name:
+        llm_kwargs["cached_content"] = cache_name
+
+    llm = ChatGoogleGenerativeAI(**llm_kwargs)
 
     stm = ShortTermMemory(conn)
 
@@ -223,7 +235,7 @@ def create_os_engineer_node(
             )
 
             # Build messages for this iteration
-            messages = _build_messages(state, context, command_outputs, iteration, max_iterations, env_context)
+            messages = _build_messages(state, context, command_outputs, iteration, max_iterations, env_context, cache_name)
             messages.append(("human", query))
 
             try:
@@ -367,7 +379,7 @@ def create_os_engineer_node(
         )
         final_messages = _build_messages(
             state, context, command_outputs,
-            max_iterations + 1, max_iterations, env_context,
+            max_iterations + 1, max_iterations, env_context, cache_name
         )
         final_messages.append((
             "human",
@@ -452,6 +464,7 @@ def _build_messages(
     iteration: int,
     max_iterations: int,
     env_context: str = "",
+    cache_name: str | None = None,
 ) -> list[tuple[str, str]]:
     """Build the LLM message list for a given ReAct iteration.
 
@@ -465,13 +478,19 @@ def _build_messages(
     Returns:
         A list of (role, content) tuples for the LLM.
     """
-    messages: list[tuple[str, str]] = [
-        ("system", _OS_SYSTEM_PROMPT),
-        ("system", f"IMPORTANT: You are currently operating in {settings.execution_mode}."),
-    ]
-
-    if env_context:
-        messages.append(("system", env_context))
+    messages: list[tuple[str, str]] = []
+    
+    if not cache_name:
+        messages.extend([
+            ("system", _OS_SYSTEM_PROMPT),
+            ("system", f"IMPORTANT: You are currently operating in {settings.execution_mode}."),
+        ])
+        if env_context:
+            messages.append(("system", env_context))
+    else:
+        # If cached, we still need to remind it of execution mode which might be dynamic,
+        # but since it's typically static, we could cache it. For now we append it dynamically.
+        messages.append(("system", f"IMPORTANT: You are currently operating in {settings.execution_mode}."))
 
     if state.get("router_instruction"):
         messages.append(

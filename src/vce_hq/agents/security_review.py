@@ -20,6 +20,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 from vce_hq.agents.rag import retrieve_context
 from vce_hq.agents.state import AgentState
+from vce_hq.cache_manager import cache_manager
 from vce_hq.config import settings
 from vce_hq.db.models import AgentType, TokenUsageRecord
 from vce_hq.db.short_term import ShortTermMemory
@@ -108,11 +109,21 @@ def create_security_review_node(
     Returns:
         An async function compatible with LangGraph's node signature.
     """
-    llm = ChatGoogleGenerativeAI(
-        model=settings.llm_model,
-        google_api_key=settings.google_api_key,
-        temperature=0.0,  # Deterministic — security decisions must be consistent
+    cache_name = cache_manager.get_or_create_cache(
+        model_name=settings.llm_model,
+        system_prompt=_SECURITY_REVIEW_PROMPT,
+        env_context="",
     )
+
+    llm_kwargs = {
+        "model": settings.llm_model,
+        "google_api_key": settings.google_api_key,
+        "temperature": 0.0,
+    }
+    if cache_name:
+        llm_kwargs["cached_content"] = cache_name
+
+    llm = ChatGoogleGenerativeAI(**llm_kwargs)
     
     stm = ShortTermMemory(conn)
 
@@ -186,10 +197,11 @@ def create_security_review_node(
             include_resolutions=True,
         )
 
-        messages = [
-            ("system", _SECURITY_REVIEW_PROMPT),
-            ("system", f"IMPORTANT: The agents operated in {settings.execution_mode}. Ensure their actions did not exceed this mode's capabilities."),
-        ]
+        messages = []
+        if not cache_name:
+            messages.append(("system", _SECURITY_REVIEW_PROMPT))
+        
+        messages.append(("system", f"IMPORTANT: The agents operated in {settings.execution_mode}. Ensure their actions did not exceed this mode's capabilities."))
 
         if context:
             messages.append(
