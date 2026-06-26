@@ -5,6 +5,7 @@ and reuse them across agent invocations to drastically reduce prompt token usage
 """
 import logging
 import hashlib
+import time
 from typing import Optional, Any
 
 from langchain_core.messages import SystemMessage
@@ -16,8 +17,8 @@ class CacheManager:
     """Manages Gemini context caches."""
     
     def __init__(self):
-        # Maps cache_key -> cache_name (the string ID returned by Gemini)
-        self._active_caches: dict[str, str] = {}
+        # Maps cache_key -> (cache_name, expiry_timestamp)
+        self._active_caches: dict[str, tuple[str, float]] = {}
         
     def _compute_cache_key(self, model: str, system_prompt: str, env_context: str, tools: list[Any] = None) -> str:
         """Compute a deterministic hash for the cache contents."""
@@ -52,7 +53,12 @@ class CacheManager:
         cache_key = self._compute_cache_key(model_name, system_prompt, env_context, tools)
         
         if cache_key in self._active_caches:
-            return self._active_caches[cache_key]
+            cache_name, expiry = self._active_caches[cache_key]
+            if time.time() < expiry:
+                return cache_name
+            else:
+                logger.info("Context Cache expired, creating new one for key: %s", cache_key[:8])
+                del self._active_caches[cache_key]
             
         try:
             logger.info("Attempting to create Gemini Context Cache for key: %s", cache_key[:8])
@@ -70,8 +76,17 @@ class CacheManager:
                 ttl=ttl
             )
             
+            # Parse ttl string e.g. "3600s" to int. Default to 3600 if parsing fails.
+            try:
+                ttl_seconds = int(ttl.strip('s'))
+            except ValueError:
+                ttl_seconds = 3600
+                
+            # Keep a 5-minute (300s) buffer before actual expiration
+            expiry_timestamp = time.time() + ttl_seconds - 300
+            
             logger.info("Successfully created context cache: %s", cache_name)
-            self._active_caches[cache_key] = cache_name
+            self._active_caches[cache_key] = (cache_name, expiry_timestamp)
             return cache_name
             
         except Exception as e:
