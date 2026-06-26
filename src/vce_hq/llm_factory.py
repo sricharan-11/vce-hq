@@ -1,0 +1,57 @@
+"""Factory for creating LLM instances dynamically."""
+
+import logging
+from typing import Any
+
+from langchain.chat_models import init_chat_model
+from langchain_core.language_models.chat_models import BaseChatModel
+
+from vce_hq.config import settings
+
+logger = logging.getLogger(__name__)
+
+
+def get_llm(**kwargs: Any) -> BaseChatModel:
+    """Instantiate a chat model based on the configured provider.
+    
+    Args:
+        **kwargs: Additional arguments to pass to the model (e.g. temperature).
+        
+    Returns:
+        A Langchain BaseChatModel instance.
+    """
+    provider = settings.llm_provider.lower()
+    model_name = settings.llm_model
+
+    # Mapping custom provider names to Langchain supported provider strings
+    langchain_provider = provider
+    
+    # Optional arguments to inject based on provider
+    provider_kwargs = {}
+    
+    if provider == "openai":
+        if settings.openai_api_key:
+            provider_kwargs["api_key"] = settings.openai_api_key
+        if settings.openai_api_base:
+            provider_kwargs["base_url"] = settings.openai_api_base
+            
+    elif provider == "anthropic":
+        if settings.anthropic_api_key:
+            provider_kwargs["api_key"] = settings.anthropic_api_key
+            
+    elif provider == "google_genai" or provider == "google":
+        langchain_provider = "google_genai"
+        if settings.google_api_key:
+            provider_kwargs["api_key"] = settings.google_api_key
+
+    # Merge provider kwargs with user-supplied kwargs
+    # User-supplied kwargs (like temperature) take precedence
+    final_kwargs = {**provider_kwargs, **kwargs}
+    
+    logger.debug("Initializing LLM: %s via %s", model_name, langchain_provider)
+
+    return init_chat_model(
+        model=model_name,
+        model_provider=langchain_provider,
+        **final_kwargs
+    )

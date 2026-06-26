@@ -16,7 +16,7 @@ import json
 import logging
 import sqlite3
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+from vce_hq.llm_factory import get_llm
 
 from vce_hq.agents.rag import retrieve_context
 from vce_hq.agents.state import AgentState
@@ -174,7 +174,7 @@ def create_os_engineer_node(
     if cache_name:
         llm_kwargs["cached_content"] = cache_name
 
-    llm = ChatGoogleGenerativeAI(**llm_kwargs)
+    llm = get_llm(**llm_kwargs)
 
     stm = ShortTermMemory(conn)
 

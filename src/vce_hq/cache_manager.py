@@ -9,7 +9,9 @@ import time
 from typing import Optional, Any
 
 from langchain_core.messages import SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI, create_context_cache
+from langchain_google_genai import create_context_cache
+from vce_hq.llm_factory import get_llm
+from vce_hq.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,10 @@ class CacheManager:
             The cache_name string if successful, or None if the payload was too small
             or an error occurred (falling back to stateless).
         """
+        if settings.llm_provider.lower() not in ["google_genai", "google"]:
+            # OpenAI, Anthropic, DeepSeek handle caching natively behind the scenes
+            return None
+            
         cache_key = self._compute_cache_key(model_name, system_prompt, env_context, tools)
         
         if cache_key in self._active_caches:
@@ -67,7 +73,7 @@ class CacheManager:
             if env_context:
                 messages.append(SystemMessage(content=env_context))
                 
-            temp_model = ChatGoogleGenerativeAI(model=model_name)
+            temp_model = get_llm()
             
             cache_name = create_context_cache(
                 model=temp_model,

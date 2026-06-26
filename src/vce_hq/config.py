@@ -1,14 +1,13 @@
 """Centralized configuration loaded from environment variables.
 
-All settings are validated at startup via Pydantic. Missing required
-values (e.g., GOOGLE_API_KEY) will raise a clear error before any
-request is served.
+All settings are validated at startup via Pydantic.
 """
 
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
+from pydantic import Field, AliasChoices
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,9 +21,13 @@ class Settings(BaseSettings):
     """Application-wide settings sourced from environment variables.
 
     Attributes:
-        google_api_key: Google AI API key for Gemini LLM and embedding calls.
-        llm_model: Gemini model identifier used by all agents.
-        embedding_model: Google embedding model for vector generation.
+        google_api_key: Google AI API key.
+        openai_api_key: OpenAI API key (also used for Qwen/DeepSeek if via OpenAI compatible endpoint).
+        anthropic_api_key: Anthropic API key.
+        llm_provider: The provider to use for the LLM (e.g., google_genai, openai, anthropic).
+        llm_model: The specific model identifier used by all agents.
+        embedding_provider: The provider to use for embeddings.
+        embedding_model: The specific embedding model.
         embedding_dimensions: Dimensionality of the embedding vectors.
         data_dir: Root directory for per-tenant SQLite databases.
         host: Server bind address.
@@ -49,13 +52,20 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Google AI — no prefix override, read directly as GOOGLE_API_KEY
-    google_api_key: str
+    # API Keys (can be provided without VCE_ prefix)
+    google_api_key: str | None = Field(default=None, validation_alias=AliasChoices('vce_google_api_key', 'google_api_key'))
+    openai_api_key: str | None = Field(default=None, validation_alias=AliasChoices('vce_openai_api_key', 'openai_api_key'))
+    anthropic_api_key: str | None = Field(default=None, validation_alias=AliasChoices('vce_anthropic_api_key', 'anthropic_api_key'))
+    
+    # Custom API Base (useful for OpenAI-compatible providers like DeepSeek, Qwen)
+    openai_api_base: str | None = Field(default=None, validation_alias=AliasChoices('vce_openai_api_base', 'openai_api_base'))
 
-    # LLM
+    # LLM Configuration
+    llm_provider: str = "google_genai"
     llm_model: str = "gemini-3.1-pro"
 
-    # Embeddings
+    # Embeddings Configuration
+    embedding_provider: str = "google_genai"
     embedding_model: str = "text-embedding-005"
     embedding_dimensions: int = 768
 
@@ -87,59 +97,16 @@ class Settings(BaseSettings):
     execution_mode: ExecutionMode = ExecutionMode.MODE_1
 
     def tenant_db_path(self, tenant_id: str) -> Path:
-        """Return the SQLite database path for a given tenant.
-
-        Each tenant gets an isolated directory under ``data_dir``.
-        The directory is created if it does not exist.
-        """
+        """Return the SQLite database path for a given tenant."""
         tenant_dir = self.data_dir / tenant_id
         tenant_dir.mkdir(parents=True, exist_ok=True)
         return tenant_dir / "vce.db"
 
 
-# Module-level singleton — import ``settings`` anywhere.
-# Override GOOGLE_API_KEY via a non-prefixed env var since it's a
-# Google-ecosystem convention.
-class _SettingsWithGoogleKey(Settings):
-    """Extends Settings to accept GOOGLE_API_KEY without the VCE_ prefix."""
-
-    model_config = SettingsConfigDict(
-        env_prefix="VCE_",
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra="ignore",
-    )
-
-    # Override: read GOOGLE_API_KEY directly (no VCE_ prefix).
-    google_api_key: str
-
-    @classmethod
-    def settings_customise_sources(
-        cls,
-        settings_cls: type[BaseSettings],
-        init_settings: any,
-        env_settings: any,
-        dotenv_settings: any,
-        file_secret_settings: any,
-    ) -> tuple:
-        """Add a non-prefixed env source for GOOGLE_API_KEY."""
-        from pydantic_settings import EnvSettingsSource
-
-        # Standard prefixed source (VCE_*)
-        prefixed = env_settings
-        # Non-prefixed source for GOOGLE_API_KEY
-        non_prefixed = EnvSettingsSource(
-            settings_cls,
-            env_prefix="",
-            env_nested_delimiter=None,
-        )
-        return (init_settings, prefixed, non_prefixed, dotenv_settings, file_secret_settings)
-
-
 def get_settings() -> Settings:
     """Factory for creating settings. Used by FastAPI dependency injection."""
-    return _SettingsWithGoogleKey()  # type: ignore[return-value]
+    return Settings()
 
 
 settings: Settings = get_settings()
+

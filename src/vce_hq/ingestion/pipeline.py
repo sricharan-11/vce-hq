@@ -22,7 +22,7 @@ import sqlite3
 from dataclasses import dataclass
 
 from langchain_core.messages import HumanMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+from vce_hq.llm_factory import get_llm
 
 from vce_hq.config import settings
 from vce_hq.db.long_term import LongTermMemory
@@ -64,11 +64,7 @@ class IngestionPipeline:
         self._chunker = TextChunker(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         
         # Instantiate LLM for Contextual Retrieval summarization
-        self._llm = ChatGoogleGenerativeAI(
-            model=settings.llm_model,
-            google_api_key=settings.google_api_key,
-            temperature=0.0,
-        )
+        self._llm = get_llm(temperature=0.0)
 
     async def _generate_context(self, full_doc: str, chunk: str) -> str:
         """Generate Anthropic-style contextual retrieval text for a chunk."""
