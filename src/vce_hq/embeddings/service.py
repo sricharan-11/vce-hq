@@ -55,10 +55,14 @@ class EmbeddingService:
     async def embed(self, text: str, *, task_type: str = "RETRIEVAL_DOCUMENT") -> list[float]:
         """Embed a single text string."""
         if task_type == "RETRIEVAL_QUERY":
-            return await self._client.aembed_query(text)
+            result = await self._client.aembed_query(text)
         else:
             results = await self._client.aembed_documents([text])
-            return results[0]
+            result = results[0]
+        
+        if self._dimensions and len(result) > self._dimensions:
+            return result[:self._dimensions]
+        return result
 
     async def embed_query(self, text: str) -> list[float]:
         """Embed a search query."""
@@ -77,7 +81,10 @@ class EmbeddingService:
             return []
             
         # Langchain handles chunking and rate limits internally for most providers
-        return await self._client.aembed_documents(text_list)
+        results = await self._client.aembed_documents(text_list)
+        if self._dimensions:
+            return [res[:self._dimensions] if len(res) > self._dimensions else res for res in results]
+        return results
 
     # Alias used by inventory capture for clarity
     embed_async = embed
