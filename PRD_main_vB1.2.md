@@ -305,14 +305,29 @@ The platform operates under a flexible, env-var controlled `VCE_EXECUTION_MODE`.
 
 ---
 
-## 7. Webhook Ingestion and Event Schema
+## 7. Authentication & User Management
 
-### 7.1 Supported Sources (v1)
+### 7.1 Initial Installation & Access
+- The system features a dedicated standalone Authentication Module.
+- Upon initial installation/deployment, the system provisions a default `admin` user with a static, pre-configured password like VCE-HQ#2026 
+
+### 7.2 User Management
+- The `admin` user has access to a dedicated **User Management Section** in the UI.
+- Within this section, the admin can change their password, and create/manage additional user accounts for the tenant.
+
+### 7.3 Data Store
+- All user identities, hashed passwords, and session data utilize the existing **per-tenant SQLite database**. There is no need for an external database like Postgres or Redis.
+
+---
+
+## 8. Webhook Ingestion and Event Schema
+
+### 8.1 Supported Sources (v1)
 - Datadog (alert webhooks)
 - AWS CloudWatch (SNS -> webhook bridge)
 - Generic JSON (user-defined schema)
 
-### 7.2 Normalized Event Schema
+### 8.2 Normalized Event Schema
 ```json
 {
   "event_id": "uuid",
@@ -331,7 +346,7 @@ All incoming webhooks are normalized into this schema before being handed to the
 
 ---
 
-## 8. Non-Functional Requirements
+## 9. Non-Functional Requirements
 
 | Requirement | Target |
 |---|---|
@@ -344,14 +359,14 @@ All incoming webhooks are normalized into this schema before being handed to the
 
 ---
 
-## 9. Deployment and Infrastructure (not now, now it's just a plain VM)
+## 10. Deployment and Infrastructure (not now, now it's just a plain VM)
 
 - **Container Runtime:** Docker (production target: Kubernetes on GKE).
 - **Future Consideration:** Firecracker micro-VMs for stronger isolation if required by enterprise tenants.
 - **Orchestration:** Kubernetes for container lifecycle management, autoscaling, and health monitoring.
 - **CI/CD:** GitHub Actions -> Container Registry -> GKE rolling deployment.
 
-## 10. Decisions Log
+## 11. Decisions Log
 
 > **All initial open questions have been resolved:**
 > - **Execution Security:** Migrated from Version A's static allowlist-first model to a **Blocklist-First** architecture. Commands are allowed by default and blocked only by explicit dangerous-pattern rules. There is no approved-command list. The blocklist is the sole mechanism that rejects commands.
@@ -376,9 +391,11 @@ All incoming webhooks are normalized into this schema before being handed to the
 > - **Embedding model:** Google `text-embedding-005` for v1-v2. `gemini-embedding-2` (multimodal, 3072-dim) considered from v3+ if PDF/diagram ingestion is needed.
 > - **Allowlist → Blocklist Migration:** Documented tradeoff — Version A's allowlist model provides tighter control but creates operational friction at scale. Version B's blocklist model prioritizes velocity and extensibility, compensating for the wider surface area with deeper LLM Gate analysis, mandatory HITL for destructive operations, and a comprehensive global blocklist for universally dangerous patterns.
 
+> - **Authentication Module:** Decided against complex initial auth (like Google OAuth) for now to ensure easier on-prem/self-hosted deployment. Adopted a standalone Auth module utilizing the local SQLite DB. Features an initial default admin + static password setup, with password rotation and user provisioning handled within a built-in User Management UI.
+
 ---
 
-## 11. Success Metrics
+## 12. Success Metrics
 
 | Metric | Target |
 |---|---|
@@ -390,7 +407,7 @@ All incoming webhooks are normalized into this schema before being handed to the
 
 ---
 
-## 12. Milestones
+## 13. Milestones
 
 | Phase | Deliverable | Target |
 |---|---|---|

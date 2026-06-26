@@ -32,11 +32,37 @@ def run_migrations(conn: sqlite3.Connection) -> None:
     _create_stm_tables(conn)
     _create_ltm_tables(conn)
     _create_vault_tables(conn)
+    _create_auth_tables(conn)
     
     # Retroactive migrations for v1.x -> v1.y
     _retroactive_migrations(conn)
     
     conn.commit()
+
+
+def _create_auth_tables(conn: sqlite3.Connection) -> None:
+    """Create Authentication and User Management tables."""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id               TEXT PRIMARY KEY,
+            username         TEXT UNIQUE NOT NULL,
+            password_hash    TEXT NOT NULL,
+            role             TEXT NOT NULL DEFAULT 'user',
+            created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        );
+    """)
+
+    # Check if we need to seed the default admin
+    admin_exists = conn.execute("SELECT 1 FROM users WHERE username = 'admin'").fetchone()
+    if not admin_exists:
+        import uuid
+        from vce_hq.auth.security import get_password_hash
+        admin_id = str(uuid.uuid4())
+        hashed_pw = get_password_hash(settings.admin_password)
+        conn.execute(
+            "INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)",
+            (admin_id, "admin", hashed_pw, "admin")
+        )
 
 
 def _retroactive_migrations(conn: sqlite3.Connection) -> None:

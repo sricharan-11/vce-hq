@@ -82,8 +82,11 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     log_format: Literal["json", "console"] = "json"
 
-    # Security
+    # Security & Auth
     credential_secret: str = "change-this-to-a-strong-random-secret"
+    jwt_secret_key: str = "change-this-to-a-strong-random-jwt-secret"
+    jwt_expiration_minutes: int = 1440  # 24 hours
+    admin_password: str = "admin123"    # Default fallback if not provided
 
     # Command execution (The Hands)
     cmd_max_iterations: int = 5

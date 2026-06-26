@@ -53,7 +53,10 @@ def create_app() -> FastAPI:
     # Request logging
     app.add_middleware(RequestLoggingMiddleware)
 
+    from vce_hq.auth.routes import router as auth_router
+
     # ── Routes ────────────────────────────────────────────────
+    app.include_router(auth_router)
     app.include_router(health.router)
     app.include_router(webhooks.router)
     app.include_router(analyze.router)
