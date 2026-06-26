@@ -59,6 +59,8 @@ def get_llm(**kwargs: Any) -> BaseChatModel:
     # Merge provider kwargs with user-supplied kwargs
     # User-supplied kwargs (like temperature) take precedence
     final_kwargs = {**provider_kwargs, **kwargs}
+    final_kwargs.pop("model", None)
+    final_kwargs.pop("model_provider", None)
     
     logger.debug("Initializing LLM: %s via %s", model_name, langchain_provider)
 
