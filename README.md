@@ -27,9 +27,34 @@ Each tenant runs in complete isolation with its own SQLite database (+ sqlite-ve
 
 ## Quick Start
 
+### Using Docker (Recommended)
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/sricharan-11/vce-hq.git
+   cd vce-hq
+   ```
+
+2. Configure the environment:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your GOOGLE_API_KEY
+   ```
+
+3. Run the application:
+   ```bash
+   docker compose up -d
+   ```
+
+The API will be available at `http://localhost:80`. Interactive docs at `/docs`.
+
+### Bare Metal Installation
+
 ```bash
 # 1. Clone and install
 git clone <repo-url> && cd VCE-HQ
+python -m venv venv
+source venv/bin/activate
 pip install -e ".[dev]"
 
 # 2. Configure
@@ -38,10 +63,10 @@ cp .env.example .env
 
 # 3. Run
 python -m vce_hq
-# or: uvicorn vce_hq.api.app:create_app --factory --reload
+# or: uvicorn vce_hq.api.app:create_app --factory --host 0.0.0.0 --port 80
 ```
 
-The API will be available at `http://localhost:8000`. Interactive docs at `/docs`.
+The API will be available at `http://localhost:80`. Interactive docs at `/docs`.
 
 ## API Endpoints
 
@@ -108,4 +133,4 @@ pytest -v
 
 ## License
 
-Proprietary. All rights reserved.
+Released under the **Apache 2.0 License**.

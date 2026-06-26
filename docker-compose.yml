@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  vce-hq:
+    build: .
+    container_name: vce-hq
+    ports:
+      - "80:80"
+    env_file:
+      - .env
+    restart: unless-stopped
