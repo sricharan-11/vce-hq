@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     google_api_key: str | None = Field(default=None, validation_alias=AliasChoices('vce_google_api_key', 'google_api_key'))
     openai_api_key: str | None = Field(default=None, validation_alias=AliasChoices('vce_openai_api_key', 'openai_api_key'))
     anthropic_api_key: str | None = Field(default=None, validation_alias=AliasChoices('vce_anthropic_api_key', 'anthropic_api_key'))
+    deepseek_api_key: str | None = Field(default=None, validation_alias=AliasChoices('vce_deepseek_api_key', 'deepseek_api_key'))
+    qwen_api_key: str | None = Field(default=None, validation_alias=AliasChoices('vce_qwen_api_key', 'qwen_api_key'))
     
     # Custom API Base (useful for OpenAI-compatible providers like DeepSeek, Qwen)
     openai_api_base: str | None = Field(default=None, validation_alias=AliasChoices('vce_openai_api_base', 'openai_api_base'))

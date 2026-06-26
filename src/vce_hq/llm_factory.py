@@ -43,6 +43,18 @@ def get_llm(**kwargs: Any) -> BaseChatModel:
         langchain_provider = "google_genai"
         if settings.google_api_key:
             provider_kwargs["api_key"] = settings.google_api_key
+            
+    elif provider == "deepseek":
+        langchain_provider = "openai"
+        provider_kwargs["base_url"] = "https://api.deepseek.com/v1"
+        if settings.deepseek_api_key:
+            provider_kwargs["api_key"] = settings.deepseek_api_key
+            
+    elif provider == "qwen":
+        langchain_provider = "openai"
+        provider_kwargs["base_url"] = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+        if settings.qwen_api_key:
+            provider_kwargs["api_key"] = settings.qwen_api_key
 
     # Merge provider kwargs with user-supplied kwargs
     # User-supplied kwargs (like temperature) take precedence
