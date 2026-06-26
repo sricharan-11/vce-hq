@@ -71,6 +71,7 @@ class EnvironmentProfile:
         """
         lines = [
             "## ENVIRONMENT CONTEXT (auto-discovered at startup)",
+            "CRITICAL WARNING: This context represents the VCE-HQ platform host environment. For tenant-specific queries, you MUST use the SSH and VM details provided in the TENANT CONTEXT (Retrieved Context) instead of the details listed here. Do NOT SSH into the VMs listed below unless explicitly investigating the VCE-HQ platform itself.",
             f"Cloud Provider: {self.cloud_provider.upper()}",
             f"Project: {self.project_id}",
             f"Service Account: {self.service_account}",
