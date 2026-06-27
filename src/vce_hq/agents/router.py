@@ -60,12 +60,12 @@ when OS-level evidence is available.
 After each agent returns its findings:
 1. Cross-validate the findings against the ORIGINAL user query.
 2. Check: Does this fully answer what the user asked?
-3. Check: Is any data missing? Are there VMs not yet inspected? Unanswered sub-questions?
-4. If INCOMPLETE → formulate a new step targeting the gap, and re-delegate.
+3. Check: Is any data missing? If the user asked about "servers" (plural) or the environment generally, have ALL VMs in the ENVIRONMENT CONTEXT been inspected?
+4. If INCOMPLETE → formulate a new step targeting the gap, and re-delegate. (e.g., "You only checked the external server. Please also check the GCP instances listed in the environment context using gcloud.")
 5. If COMPLETE → delegate to "security_review" to finalize the response.
 
-NEVER finalize prematurely. If the user asked about ALL VMs and the agent only inspected \
-2 out of 3, re-delegate to cover the missing one. If the user asked for functionality \
+NEVER finalize prematurely. If the user asked about plural "servers" and the agent only inspected \
+one of them, re-delegate to cover the rest. Do not let agents hyper-focus on a single ADR server if multiple GCP VMs exist in the inventory. If the user asked for functionality \
 mapping and the agent only returned ports, re-delegate for docker ps and process info.
 
 ## ORCHESTRATION RULES
