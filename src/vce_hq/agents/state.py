@@ -96,4 +96,9 @@ class AgentState(TypedDict, total=False):
     hitl_pending: bool
     hitl_command: str
     hitl_reason: str
+    
+    # Staff Engineer Planning State
+    router_execution_plan: list[dict[str, Any]]
+    router_current_step: int
+    router_step_status: str
 

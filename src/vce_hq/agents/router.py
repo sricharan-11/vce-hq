@@ -115,24 +115,25 @@ Instead:
 with an explicit instruction to use the specific alternative approach.
 4. Only finalize (delegate to security_review) if there is truly NO unblocked alternative.
 
-## DYNAMIC PLANNING
-You are an autonomous planner. Do not rely on hardcoded static rules for what to inspect. Instead:
-1. Thoroughly analyze the user query against the ENVIRONMENT CONTEXT and retrieved ADRs.
-2. Determine the scope (e.g. if the user says "servers" or implies a multi-resource issue, you must plan to cover all relevant resources listed in the inventory).
-3. Determine the required connection methods and flags based purely on the Environment Context rules. Do not default to assumptions.
-4. Output your analysis and execution plan BEFORE delegating.
+## STAFF ENGINEER (STATEFUL PLANNING)
+You are an autonomous Staff Engineer. You maintain an execution plan to solve the user's query.
+- If you don't have a plan yet, generate a step-by-step array of tasks based on the ENVIRONMENT CONTEXT and the user query.
+- If you have an active plan and an agent just returned an output, evaluate the output against the expected outcome of the current step.
+- If the step failed (e.g. command blocked, target unreachable, or missing data), explicitly state the failure reason and generate a NEW plan starting from the current checkpoint.
+- NEVER finalize until the full plan is complete.
 
 ## BLOCKLIST CONSTRAINTS
 {blocklist_ref}
 
 You MUST respond with valid JSON only, no other text:
 {{
-  "analysis": "Step-by-step reasoning of what the user is asking, which exact resources (VMs, cloud services) are implicated based on the Environment Context, and what authentication methods are required.",
-  "execution_plan": ["Step 1: delegate to X to do Y", "Step 2: delegate to Z to do W", ...],
-  "theory": "Your current theory based on the evidence so far",
+  "evaluate_previous_step": "If an agent just ran, did it succeed? If it failed, what is the failure reason?",
+  "execution_plan": [
+    {{"step": 1, "agent": "os_engineer", "instruction": "...", "expected_outcome": "..."}},
+    {{"step": 2, "agent": "cloud_engineer", "instruction": "...", "expected_outcome": "..."}}
+  ],
   "delegate_to": "os_engineer" | "cloud_engineer" | "finops_agent" | "security_review",
-  "instruction": "Specific instructions for the delegated agent",
-  "gaps": "What is still missing or incomplete (empty string if complete)"
+  "instruction": "Specific instructions for the delegated agent for the current step"
 }}
 """
 
@@ -223,6 +224,11 @@ def create_router_node(
              f"You are on iteration {iterations} out of {max_iterations}. "
              f"If this is your last iteration, you MUST delegate to 'security_review'.")
         )
+        
+        plan = state.get("router_execution_plan")
+        step = state.get("router_current_step", 1)
+        if plan:
+            messages.append(("human", f"Current Execution Plan:\n{json.dumps(plan, indent=2)}\nCurrently evaluating step: {step}"))
             
         if state.get("os_analysis"):
             messages.append(("human", f"OS Engineer Output:\n{state['os_analysis']}"))
@@ -278,25 +284,35 @@ def create_router_node(
 
             result = json.loads(content)
             
-            theory = result.get("theory", "No theory provided")
-            instruction = result.get("instruction", "Proceed with analysis")
+            new_plan = result.get("execution_plan")
             target = result.get("delegate_to", "security_review")
+            instruction = result.get("instruction", "Proceed with analysis")
+            evaluate_previous_step = result.get("evaluate_previous_step", "")
             
             # If we hit the max iterations, override the target
             if iterations >= max_iterations:
                 target = "security_review"
+                
+            current_step = step
+            if new_plan and new_plan != plan:
+                plan = new_plan
+                current_step = 1
+            elif evaluate_previous_step and "fail" not in evaluate_previous_step.lower():
+                current_step += 1
             
             # Log the router's decision to STM
             stm.add_turn(ConversationTurn(
                 session_id=state.get("session_id", ""),
                 request_id=state.get("request_id"),
                 agent=AgentType.ROUTER,
-                content=f"[ROUTER THEORY]: {theory}\n[DELEGATED TO {target.upper()}]: {instruction}",
+                content=f"[ROUTER PLAN EVALUATION]: {evaluate_previous_step}\n[DELEGATED TO {target.upper()}]: {instruction}",
             ))
 
             return {
                 **state,
-                "router_theory": theory,
+                "router_execution_plan": plan,
+                "router_current_step": current_step,
+                "router_step_status": evaluate_previous_step,
                 "router_instruction": instruction,
                 "delegate_to": target,
                 "current_agent": "router",

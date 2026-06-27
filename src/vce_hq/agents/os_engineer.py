@@ -86,8 +86,8 @@ correct flags accordingly. Always include --zone and --project flags.
 
 - The inner command (inside --command) must be safe to run according to your assigned mode.
 - Interactive SSH (without --command) is NOT allowed.
-- Before executing commands, analyze the ENVIRONMENT CONTEXT and retrieved ADRs. Determine the best available connection method for the target instance(s).
-- If multiple VMs are listed in the inventory and the user query implies a broad scope, you must execute diagnostic commands on each of them.
+- Before executing commands, dynamically determine the best connection method based on the ENVIRONMENT CONTEXT and retrieved ADRs.
+- If multiple VMs match the scope of the user's query, you MUST execute diagnostic commands on each of them (one command per VM) to ensure comprehensive evidence gathering.
 
 ALLOWED COMMANDS:
 You can use any OS commands. The system's blocklist and current Execution Mode will automatically determine if a command is permitted, requires LLM Security Gate review, or requires Human-in-the-Loop (HITL) approval.
