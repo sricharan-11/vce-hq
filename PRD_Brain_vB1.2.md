@@ -92,10 +92,11 @@ Instead of passing the entire bloated conversation history to the Supervisor, th
 3. Combines these semantic matches with the immediately preceding turns to ensure chronological continuity.
 This approach guarantees relevant older context is retained while minimizing token consumption.
 
-### 3.2 Graceful Irrelevant Query Handling
-For queries completely outside the scope of infrastructure operations (`IRRELEVANT` intent), the system does not execute the specialist agents. Instead:
-- The Intent Analyzer generates a polite, clarifying question attempting to map the user's query to a valid infrastructure concept.
-- The graph routes directly to the Security Review node to output this clarifying question, allowing the user to pivot back to a valid topic.
+### 3.2 Graceful Irrelevant & Ambiguous Query Handling
+For queries completely outside the scope of infrastructure operations (`IRRELEVANT` intent), or queries that lack specific project/system context (`AMBIGUOUS` intent, e.g., "my database"), the system does not execute the specialist agents or downstream RAG pipelines. Instead:
+- If `IRRELEVANT`, the Intent Analyzer generates a polite, clarifying question attempting to map the user's query to a valid infrastructure concept.
+- If `AMBIGUOUS`, the Intent Analyzer immediately halts and asks the user to clarify which specific system or project they are referring to. This prevents the downstream RAG from hallucinating mismatched ADRs based purely on generic keyword hits.
+- The graph routes directly out of the swarm to output this clarifying question, allowing the user to provide necessary context before investigation begins.
 
 ### 3.3 Entity Resolution (Shorthand Mapping)
 To improve operational accuracy, the Intent Analyzer automatically resolves partial or shorthand infrastructure names in user queries (e.g., mapping "abc" to "abc-dev-002-mumbai" or "cart" to "lowerground_cart_app"). It validates these shorthands against the auto-discovered `EnvironmentProfile` and outputs a `resolved_query`. This ensures that downstream agents (Cloud Engineer, OS Engineer) always execute commands against exact, fully qualified resource identifiers without requiring the user to type them perfectly.

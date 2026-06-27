@@ -106,6 +106,11 @@ Datadog Webhook / CloudWatch SNS / Custom JSON / User Query
                tenant_id, severity, etc.)
                             |
                             v
+                    Intent Analyzer
+              (Expands shorthand, catches
+               AMBIGUOUS/IRRELEVANT queries)
+                            |
+                            v
 ```
 
 #### Agent Orchestration (The Brain - Supervisor Pattern, Cyclic)
@@ -226,6 +231,7 @@ Datadog Webhook / CloudWatch SNS / Custom JSON / User Query
   +----------------------------------+ +----------------------------------+
 ```
 
+- The **Intent Analyzer** acts as the frontline gatekeeper for user queries. It performs entity resolution (expanding shorthand like 'cart' to full VM names), detects if a query is a continuation of an existing session, and catches **AMBIGUOUS** queries (e.g., "my database" without specifying a project). If a query is ambiguous, it immediately halts execution and asks the user for clarification, preventing the downstream RAG pipeline from hallucinating mismatched ADRs.
 - The **Supervisor Router** acts as the central orchestrator using a **Hierarchical Swarm (Supervisor) Pattern**. Rather than a simple classifier that fires once, the Router operates in a **cyclic, closed-loop** - it formulates a working theory, delegates one step at a time to a specialist agent, **cross-validates the findings against the original user query**, identifies gaps, and re-delegates until the evidence fully addresses what the user asked. This closed-loop ensures the system never finalizes prematurely based on incomplete data.
 - **Specialist agents report to the Supervisor, not to the user.** The OS Engineer, Cloud Engineer, and FinOps Agent produce raw diagnostic evidence and findings. They do NOT format user-facing answers. The Supervisor cross-validates agent output, decides when the investigation is complete, and only then forwards to Security Review for final user-facing output.
 - **Multi-layer tasks** (spanning both OS and cloud layers) are handled by the **Supervisor's iterative delegation**.
