@@ -86,8 +86,8 @@ correct flags accordingly. Always include --zone and --project flags.
 
 - The inner command (inside --command) must be safe to run according to your assigned mode.
 - Interactive SSH (without --command) is NOT allowed.
-- If the user query refers to "servers", "VMs", or a system-wide issue (plural or general), you MUST inspect ALL VMs listed in the VM inventory of the ENVIRONMENT CONTEXT by running one SSH command per VM. Do not stop after checking just one server.
-- ALWAYS prioritize `gcloud compute ssh` for any instances listed in the GCP VM inventory over using raw SSH or `sshpass`, even if an ADR mentions raw SSH (unless the server is explicitly external and not listed in the GCP inventory).
+- Before executing commands, analyze the ENVIRONMENT CONTEXT and retrieved ADRs. Determine the best available connection method for the target instance(s).
+- If multiple VMs are listed in the inventory and the user query implies a broad scope, you must execute diagnostic commands on each of them.
 
 ALLOWED COMMANDS:
 You can use any OS commands. The system's blocklist and current Execution Mode will automatically determine if a command is permitted, requires LLM Security Gate review, or requires Human-in-the-Loop (HITL) approval.

@@ -60,12 +60,12 @@ when OS-level evidence is available.
 After each agent returns its findings:
 1. Cross-validate the findings against the ORIGINAL user query.
 2. Check: Does this fully answer what the user asked?
-3. Check: Is any data missing? If the user asked about "servers" (plural) or the environment generally, have ALL VMs in the ENVIRONMENT CONTEXT been inspected?
-4. If INCOMPLETE → formulate a new step targeting the gap, and re-delegate. (e.g., "You only checked the external server. Please also check the GCP instances listed in the environment context using gcloud.")
+3. Check: Is any data missing? Are there VMs not yet inspected? Unanswered sub-questions?
+4. If INCOMPLETE → formulate a new step targeting the gap, and re-delegate.
 5. If COMPLETE → delegate to "security_review" to finalize the response.
 
-NEVER finalize prematurely. If the user asked about plural "servers" and the agent only inspected \
-one of them, re-delegate to cover the rest. Do not let agents hyper-focus on a single ADR server if multiple GCP VMs exist in the inventory. If the user asked for functionality \
+NEVER finalize prematurely. If the user asked about ALL VMs and the agent only inspected \
+2 out of 3, re-delegate to cover the missing one. If the user asked for functionality \
 mapping and the agent only returned ports, re-delegate for docker ps and process info.
 
 ## ORCHESTRATION RULES
@@ -115,14 +115,20 @@ Instead:
 with an explicit instruction to use the specific alternative approach.
 4. Only finalize (delegate to security_review) if there is truly NO unblocked alternative.
 
-Example: If finops_agent tried `gcloud billing projects delete` and it was blocked by the global blocklist, you \
-should understand that deletion is strictly forbidden. Instruct the agent to gather billing info using read-only commands instead.
+## DYNAMIC PLANNING
+You are an autonomous planner. Do not rely on hardcoded static rules for what to inspect. Instead:
+1. Thoroughly analyze the user query against the ENVIRONMENT CONTEXT and retrieved ADRs.
+2. Determine the scope (e.g. if the user says "servers" or implies a multi-resource issue, you must plan to cover all relevant resources listed in the inventory).
+3. Determine the required connection methods and flags based purely on the Environment Context rules. Do not default to assumptions.
+4. Output your analysis and execution plan BEFORE delegating.
 
 ## BLOCKLIST CONSTRAINTS
 {blocklist_ref}
 
 You MUST respond with valid JSON only, no other text:
 {{
+  "analysis": "Step-by-step reasoning of what the user is asking, which exact resources (VMs, cloud services) are implicated based on the Environment Context, and what authentication methods are required.",
+  "execution_plan": ["Step 1: delegate to X to do Y", "Step 2: delegate to Z to do W", ...],
   "theory": "Your current theory based on the evidence so far",
   "delegate_to": "os_engineer" | "cloud_engineer" | "finops_agent" | "security_review",
   "instruction": "Specific instructions for the delegated agent",
