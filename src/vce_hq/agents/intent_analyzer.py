@@ -50,10 +50,10 @@ Cross-reference the user's query with the provided Environment Profile. If you d
 
 Respond with valid JSON only:
 {
-  "intent": "CONTINUATION" | "NEW_TOPIC" | "IRRELEVANT",
+  "intent": "CONTINUATION" | "NEW_TOPIC" | "IRRELEVANT" | "AMBIGUOUS",
   "reasoning": "Brief explanation of why you classified it this way",
-  "clarifying_question": "Required only if intent is IRRELEVANT. A polite question redirecting to infra.", If it's already relevant and you lack some calrity you can ask it back to the user. 
-  "resolved_query": "The original user query with all shorthand names expanded to their full exact names from the Environment Profile. If no shorthand was used, return the original query."
+  "clarifying_question": "Required if intent is IRRELEVANT or AMBIGUOUS. If IRRELEVANT, politely redirect to infra. If AMBIGUOUS (e.g. asking about 'database' without specifying which project), ask the user to clarify which specific system/project they are referring to.",
+  "resolved_query": "The original user query with all shorthand names expanded. If no shorthand was used, return the original query."
 }
 """
 
@@ -197,11 +197,22 @@ def create_intent_analyzer_node(conn: sqlite3.Connection, embedding_service: Any
             elif intent == "NEW_TOPIC":
                 # Clear context to avoid confusing the router with old issues
                 conversation_history = ""
-            elif intent == "IRRELEVANT":
-                # Do not execute agents. Security review will output the clarifying question.
+            elif intent in ("IRRELEVANT", "AMBIGUOUS"):
+                # Do not execute agents. Router/Security review will handle outputting the clarifying question.
                 conversation_history = ""
                 if not clarifying_question:
-                    clarifying_question = "I specialize in cloud and OS infrastructure. Could you clarify how your question relates to your environment?"
+                    if intent == "AMBIGUOUS":
+                        clarifying_question = "Which specific project or system are you referring to?"
+                    else:
+                        clarifying_question = "I specialize in cloud and OS infrastructure. Could you clarify how your question relates to your environment?"
+                # Stop execution for these intents by returning final output immediately
+                stm.log_bot_message(session_id, clarifying_question, AgentType.INTENT_ANALYZER)
+                return {
+                    **state,
+                    "intent_status": intent,
+                    "final_output": clarifying_question,
+                    "current_agent": "intent_analyzer"
+                }
             else:
                 intent = "NEW_TOPIC"
                 conversation_history = ""
