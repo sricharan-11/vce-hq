@@ -181,6 +181,8 @@ def create_intent_analyzer_node(conn: sqlite3.Connection, embedding_service: Any
             state["command_log"] = []
             state["command_count"] = 0
             state["hitl_pending"] = False
+            state["router_execution_plan"] = []
+            state["router_current_step"] = 1
             
             if intent == "CONTINUATION":
                 # Smart Context: Use RAG to fetch semantically relevant older turns
