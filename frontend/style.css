@@ -216,15 +216,12 @@ body {
 }
 
 .message {
-    max-width: 80%;
-    min-width: 0;
     padding: 1rem;
     border-radius: 0.75rem;
     line-height: 1.5;
     animation: fadeIn 0.3s ease;
     overflow-wrap: break-word;
     word-break: break-word;
-    overflow-x: hidden;
 }
 
 @keyframes fadeIn {
@@ -234,12 +231,14 @@ body {
 
 .message.user {
     align-self: flex-end;
+    max-width: 70%;
     background-color: var(--accent);
     color: white;
 }
 
 .message.agent {
     align-self: flex-start;
+    width: 100%;
     background-color: rgba(255,255,255,0.05);
     border: 1px solid var(--border);
 }
