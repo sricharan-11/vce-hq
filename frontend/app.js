@@ -163,6 +163,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Clear the welcome message before restoring
                 chatHistory.innerHTML = '';
                 turns.forEach(turn => {
+                    // Skip empty or whitespace-only turns
+                    const trimmed = (turn.content || '').trim();
+                    if (!trimmed) return;
+                    
+                    // Skip internal router/agent chatter — only show user queries and final responses
+                    if (trimmed.startsWith('[ROUTER')) return;
+                    if (trimmed.startsWith('[OS ENGINEER')) return;
+                    if (trimmed.startsWith('[CLOUD ENGINEER')) return;
+                    if (trimmed.startsWith('[FINOPS')) return;
+                    
                     if (turn.content.startsWith('[USER QUERY]: ')) {
                         appendMessage(turn.content.replace('[USER QUERY]: ', ''), 'user');
                     } else {
