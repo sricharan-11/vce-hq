@@ -5,11 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VCE-HQ | AI Infrastructure Operations</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=2.4">
+    <link rel="stylesheet" href="style.css?v=2.5">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
-    <div class="app-container">
+    <div id="loginView" class="login-container">
+        <div class="login-card">
+            <div class="logo">
+                <i class="fa-solid fa-server"></i>
+                <h2>VCE-HQ</h2>
+            </div>
+            <p class="subtitle">AI Infrastructure Operations</p>
+            
+            <form id="loginForm">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" required>
+                </div>
+                <div id="loginError" class="error-msg"></div>
+                <button type="submit" class="btn-primary">Sign In</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="app-container" style="display: none;">
         <!-- Sidebar -->
         <nav class="sidebar">
             <div class="logo">
@@ -30,7 +53,12 @@
                 <li data-view="knowledge"><i class="fa-solid fa-book"></i> Knowledge Library</li>
                 <li data-view="vault"><i class="fa-solid fa-vault"></i> The Vault</li>
                 <li data-view="finops"><i class="fa-solid fa-coins"></i> Token Usage</li>
+                <li data-view="users" id="navUsers" style="display: none;"><i class="fa-solid fa-users"></i> Users & Access</li>
             </ul>
+
+            <div class="sidebar-bottom" style="margin-top: auto; padding: 1.5rem; border-top: 1px solid var(--border);">
+                <button id="logoutBtn" class="btn-secondary" style="width: 100%;"><i class="fa-solid fa-sign-out-alt"></i> Logout</button>
+            </div>
         </nav>
 
         <!-- Main Content -->
@@ -239,9 +267,45 @@
                 </div>
             </div>
         </main>
+        <!-- Users & Access View -->
+        <main class="main-content" id="usersView" style="display: none;">
+            <header class="topbar">
+                <h1>Users & Access</h1>
+            </header>
+            
+            <div class="users-container">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Create New User</h2>
+                    </div>
+                    <div class="card-body">
+                        <form id="createUserForm" class="settings-form">
+                            <div class="form-group">
+                                <label for="newUsername">Username</label>
+                                <input type="text" id="newUsername" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="newPassword">Password</label>
+                                <input type="password" id="newPassword" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="newRole">Role</label>
+                                <select id="newRole">
+                                    <option value="user">User</option>
+                                    <option value="admin">Admin</option>
+                                </select>
+                            </div>
+                            <div id="createUserStatus" class="status-msg"></div>
+                            <button type="submit" class="btn-primary">Create User</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </main>
+        
     </div>
     
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="app.js?v=2.4"></script>
+    <script src="app.js?v=2.5"></script>
 </body>
 </html>

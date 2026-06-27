@@ -562,3 +562,67 @@ table tbody tr:hover {
     .sidebar.open { transform: translateX(0); }
     .main-content { width: 100%; }
 }
+
+/* ── Auth Views ─────────────────────────────────────────── */
+.login-container {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--bg-dark);
+    z-index: 9999;
+}
+
+.login-card {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    padding: 3rem;
+    width: 100%;
+    max-width: 400px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    text-align: center;
+}
+
+.login-card .logo {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+}
+
+.login-card .logo i {
+    font-size: 2rem;
+    color: var(--accent);
+}
+
+.login-card .logo h2 {
+    font-size: 1.75rem;
+    font-weight: 700;
+}
+
+.login-card .subtitle {
+    color: var(--text-muted);
+    margin-bottom: 2rem;
+    font-size: 0.9rem;
+}
+
+.login-card form {
+    text-align: left;
+}
+
+.error-msg {
+    color: #ef4444;
+    font-size: 0.85rem;
+    margin-bottom: 1rem;
+    min-height: 1.2rem;
+}
+
+.status-msg {
+    color: #10b981;
+    font-size: 0.85rem;
+    margin-bottom: 1rem;
+    min-height: 1.2rem;
+}

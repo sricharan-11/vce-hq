@@ -1,28 +1,122 @@
 document.addEventListener('DOMContentLoaded', () => {
-    // --- State ---
+    // --- State & Auth ---
     let currentTenant = document.getElementById('tenantId').value;
-    
+    let currentUser = null;
+    let isAdmin = false;
+
+    function getAuthToken() {
+        return localStorage.getItem('vce_token');
+    }
+
+    async function authFetch(url, options = {}) {
+        const token = getAuthToken();
+        const headers = {
+            ...options.headers,
+            'Authorization': token ? `Bearer ${token}` : ''
+        };
+        const response = await fetch(url, { ...options, headers });
+        if (response.status === 401) {
+            handleLogout(); // Auto-logout if token is invalid/expired
+        }
+        return response;
+    }
+
+    function parseJwt(token) {
+        try {
+            return JSON.parse(atob(token.split('.')[1]));
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function checkAuth() {
+        const token = getAuthToken();
+        if (token) {
+            const payload = parseJwt(token);
+            if (payload && payload.exp * 1000 > Date.now()) {
+                currentUser = payload.sub;
+                isAdmin = payload.role === 'admin';
+                document.getElementById('loginView').style.display = 'none';
+                document.querySelector('.app-container').style.display = 'flex';
+                if (isAdmin) {
+                    document.getElementById('navUsers').style.display = 'flex';
+                }
+                
+                // Initialize Data
+                fetchAutomatedReports();
+                restoreSession();
+                return;
+            }
+        }
+        // Not authenticated
+        document.getElementById('loginView').style.display = 'flex';
+        document.querySelector('.app-container').style.display = 'none';
+    }
+
+    // --- Login Handling ---
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+        const errorDiv = document.getElementById('loginError');
+        
+        try {
+            const formData = new URLSearchParams();
+            formData.append('username', username);
+            formData.append('password', password);
+            
+            const response = await fetch('/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: formData
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                localStorage.setItem('vce_token', data.access_token);
+                errorDiv.innerText = '';
+                checkAuth();
+            } else {
+                errorDiv.innerText = 'Invalid username or password.';
+            }
+        } catch (err) {
+            errorDiv.innerText = 'Connection failed.';
+        }
+    });
+
+    function handleLogout() {
+        localStorage.removeItem('vce_token');
+        sessionStorage.removeItem('vce_session_id');
+        currentSessionId = null;
+        document.getElementById('loginView').style.display = 'flex';
+        document.querySelector('.app-container').style.display = 'none';
+    }
+
+    document.getElementById('logoutBtn').addEventListener('click', (e) => {
+        e.preventDefault();
+        handleLogout();
+    });
+
     // --- Navigation ---
     const navLinks = document.querySelectorAll('.nav-links li');
-    const views = document.querySelectorAll('.view');
+    const views = document.querySelectorAll('.view, .main-content'); // Include settings main contents
 
     navLinks.forEach(link => {
         link.addEventListener('click', () => {
-            // Update active nav
             navLinks.forEach(n => n.classList.remove('active'));
             link.classList.add('active');
 
-            // Show corresponding view
             const targetViewId = link.getAttribute('data-view') + 'View';
             views.forEach(v => {
-                if(v.id === targetViewId) {
+                if (v.id === targetViewId) {
                     v.classList.remove('hidden');
+                    v.style.display = v.tagName.toLowerCase() === 'main' ? 'block' : 'flex';
                 } else {
                     v.classList.add('hidden');
+                    if (v.tagName.toLowerCase() === 'main') v.style.display = 'none';
                 }
             });
 
-            // If switching to vault or knowledge, auto-load data
             const viewId = link.getAttribute('data-view');
             if (viewId === 'vault') {
                 loadCredentials();
@@ -30,6 +124,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 fetchKnowledge();
             } else if (viewId === 'finops') {
                 fetchFinopsData();
+            } else if (viewId === 'users') {
+                // Initialize users view
             }
         });
     });
@@ -37,13 +133,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Tenant Handling ---
     document.getElementById('tenantId').addEventListener('change', (e) => {
         currentTenant = e.target.value;
-        if(!document.getElementById('vaultView').classList.contains('hidden')) {
-            loadCredentials();
-        }
-        if(!document.getElementById('finopsView').classList.contains('hidden')) {
-            fetchFinopsData();
-        }
-        fetchAutomatedReports(); // refresh reports for new tenant
+        if(!document.getElementById('vaultView').classList.contains('hidden')) loadCredentials();
+        if(!document.getElementById('finopsView').classList.contains('hidden')) fetchFinopsData();
+        fetchAutomatedReports();
     });
 
     // --- Notification Handling ---
@@ -78,7 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function fetchAutomatedReports() {
         try {
-            const response = await fetch(`/analyze/reports/automated`, {
+            const response = await authFetch(`/analyze/reports/automated`, {
                 headers: { 'X-Tenant-ID': currentTenant }
             });
             if (response.ok) {
@@ -154,7 +246,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function restoreSession() {
         if (!currentSessionId) return;
         try {
-            const response = await fetch(`/analyze/sessions/${currentSessionId}/history`, {
+            const response = await authFetch(`/analyze/sessions/${currentSessionId}/history`, {
                 headers: { 'X-Tenant-ID': currentTenant }
             });
             if (response.ok) {
@@ -208,7 +300,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const body = { query: query };
             if (currentSessionId) body.session_id = currentSessionId;
 
-            const response = await fetch('/analyze/', {
+            const response = await authFetch('/analyze/', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -288,7 +380,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if(!currentTenant) return;
         
         try {
-            const response = await fetch('/credentials/', {
+            const response = await authFetch('/vault/credentials', {
                 headers: { 'X-Tenant-ID': currentTenant }
             });
             
@@ -348,7 +440,7 @@ document.addEventListener('DOMContentLoaded', () => {
         submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Storing...';
 
         try {
-            const response = await fetch('/credentials/', {
+            const response = await authFetch('/vault/credentials', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -383,7 +475,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if(!confirm(`Are you sure you want to securely delete '${name}'?`)) return;
 
         try {
-            const response = await fetch(`/credentials/${encodeURIComponent(name)}`, {
+            const response = await authFetch(`/credentials/${encodeURIComponent(name)}`, {
                 method: 'DELETE',
                 headers: { 'X-Tenant-ID': currentTenant }
             });
@@ -400,7 +492,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.refreshInventory = async function(name) {
         showToast(`🔄 Re-capturing inventory for '${name}'...`, 4000);
         try {
-            const response = await fetch(`/credentials/${encodeURIComponent(name)}/refresh-inventory`, {
+            const response = await authFetch(`/credentials/${encodeURIComponent(name)}/refresh-inventory`, {
                 method: 'POST',
                 headers: { 'X-Tenant-ID': currentTenant }
             });
@@ -449,7 +541,7 @@ document.addEventListener('DOMContentLoaded', () => {
             submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Ingesting...';
             
             try {
-                const response = await fetch('/knowledge/ingest', {
+                const response = await authFetch('/knowledge/ingest', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -492,7 +584,7 @@ document.addEventListener('DOMContentLoaded', () => {
         tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</td></tr>';
         
         try {
-            const response = await fetch('/knowledge', {
+            const response = await authFetch(`/knowledge/`, {
                 headers: { 'X-Tenant-ID': currentTenant }
             });
             
@@ -535,7 +627,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         try {
-            const response = await fetch(`/knowledge/${encodeURIComponent(docName)}`, {
+            const response = await authFetch(`/knowledge/${encodeURIComponent(docName)}`, {
                 method: 'DELETE',
                 headers: { 'X-Tenant-ID': currentTenant }
             });
@@ -575,7 +667,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!currentTenant) return;
         
         try {
-            const response = await fetch('/finops/token-usage', {
+            const response = await authFetch('/finops/usage', {
                 headers: { 'X-Tenant-ID': currentTenant }
             });
             
@@ -642,4 +734,45 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initial welcome message
     appendMessage(`<h2>Welcome to VCE-HQ Swarm</h2><p>I am your autonomous infrastructure operations advisor. You can ask me to analyze alerts, debug issues across Kubernetes, AWS, or GCP, and generate root-cause analyses.</p><p><em>Be sure to add your service accounts to <strong>The Vault</strong> first so I can safely retrieve live logs and metrics during diagnosis!</em></p>`, 'agent');
+
+    // --- Users & Access ---
+    document.getElementById('createUserForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const username = document.getElementById('newUsername').value;
+        const password = document.getElementById('newPassword').value;
+        const role = document.getElementById('newRole').value;
+        const statusDiv = document.getElementById('createUserStatus');
+        const submitBtn = e.target.querySelector('button');
+        
+        submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Creating...';
+        
+        try {
+            const response = await authFetch('/auth/users', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Tenant-ID': currentTenant
+                },
+                body: JSON.stringify({ username, password, role })
+            });
+            
+            if (response.ok) {
+                statusDiv.style.color = '#10b981';
+                statusDiv.innerText = `User '${username}' created successfully!`;
+                e.target.reset();
+            } else {
+                const data = await response.json();
+                statusDiv.style.color = '#ef4444';
+                statusDiv.innerText = data.detail || 'Failed to create user.';
+            }
+        } catch (err) {
+            statusDiv.style.color = '#ef4444';
+            statusDiv.innerText = 'Connection failed.';
+        } finally {
+            submitBtn.innerHTML = 'Create User';
+        }
+    });
+
+    // Check auth on load
+    checkAuth();
 });

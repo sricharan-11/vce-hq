@@ -53,17 +53,23 @@ def create_app() -> FastAPI:
     # Request logging
     app.add_middleware(RequestLoggingMiddleware)
 
+    from fastapi import Depends
+    from vce_hq.auth.dependencies import get_current_user
     from vce_hq.auth.routes import router as auth_router
 
     # ── Routes ────────────────────────────────────────────────
+    # Public routes
     app.include_router(auth_router)
     app.include_router(health.router)
     app.include_router(webhooks.router)
-    app.include_router(analyze.router)
-    app.include_router(knowledge.router)
-    app.include_router(credentials.router)
-    app.include_router(finops.router)
-    app.include_router(trace.router)
+    
+    # Protected routes
+    protected_deps = [Depends(get_current_user)]
+    app.include_router(analyze.router, dependencies=protected_deps)
+    app.include_router(knowledge.router, dependencies=protected_deps)
+    app.include_router(credentials.router, dependencies=protected_deps)
+    app.include_router(finops.router, dependencies=protected_deps)
+    app.include_router(trace.router, dependencies=protected_deps)
 
     # ── Frontend ──────────────────────────────────────────────
     @app.get("/", include_in_schema=False)
