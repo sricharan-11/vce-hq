@@ -63,9 +63,19 @@ class AgentState(TypedDict, total=False):
 
     # Supervisor output
     router_theory: str
-    # Intent Detection
-    intent_status: Literal["CONTINUATION", "NEW_TOPIC", "IRRELEVANT"]
+    # Intent Detection (Stage 1: 4-way classification)
+    intent_status: Literal[
+        "CONTINUATION",
+        "NEW_TOPIC",
+        "AMBIGUOUS",
+        "IRRELEVANT",
+        "MISSING_PARAMS",
+    ]
     clarifying_question: str
+    # Dynamic Parameter Mapping (Stage 2, post intent classification)
+    task_summary: str
+    required_parameters: list[dict[str, Any]]
+    missing_parameters: list[str]
     router_instruction: str
     delegate_to: Literal["os_engineer", "cloud_engineer", "finops_agent", "security_review"]
 

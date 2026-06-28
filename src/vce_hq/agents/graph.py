@@ -89,7 +89,9 @@ def build_agent_graph(
     graph.set_entry_point("intent_analyzer")
 
     def _route_after_intent(state: AgentState) -> str:
-        if state.get("intent_status") == "IRRELEVANT":
+        # All Intent Analyzer short-circuit branches bypass the swarm entirely
+        # and exit through security_review (which acts as pass-through for these).
+        if state.get("intent_status") in ("IRRELEVANT", "AMBIGUOUS", "MISSING_PARAMS"):
             return "security_review"
         return "router"
 

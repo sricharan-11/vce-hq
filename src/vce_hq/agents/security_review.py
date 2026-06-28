@@ -131,8 +131,11 @@ def create_security_review_node(
         """Perform mandatory security review on agent outputs."""
         logger.info("Security Review: validating for session %s", state.get("session_id"))
 
-        # If the intent analyzer flagged this as irrelevant, just output the clarifying question
-        if state.get("intent_status") == "IRRELEVANT" and state.get("clarifying_question"):
+        # Intent Analyzer short-circuit pass-through.
+        # IRRELEVANT, AMBIGUOUS, and MISSING_PARAMS never produce a command, so there
+        # is nothing to gate — surface the clarifying question as the final output.
+        if state.get("intent_status") in ("IRRELEVANT", "AMBIGUOUS", "MISSING_PARAMS") \
+                and state.get("clarifying_question"):
             return {
                 **state,
                 "security_review": state["clarifying_question"],

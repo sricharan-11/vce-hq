@@ -2,7 +2,7 @@
 
 > **Module:** The Brain (Agent Orchestration)
 > **Version:** B1.2
-> **Last Updated:** 2026-06-23
+> **Last Updated:** 2026-06-28
 > **Status:** Active
 > **Parent PRD:** [PRD_main_vB1.2.md](./PRD_main_vB1.2.md) - Section 4.4
 > **Lineage:** Rearchitected from [PRD_Brain_v1.2.md](./PRD_Brain_v1.2.md) (Version A — Allowlist Architecture)
@@ -41,7 +41,7 @@ There is **no master list of approved commands**. There is **no verb-to-tier cla
 
 This PRD defines the detailed design of **The Brain** - the LangGraph-based agent swarm that performs incident analysis and remediation. It extends the architecture defined in `PRD_main_vB1.2.md` Section 4.4 by describing:
 
-1. The **Intent Analyzer** - entry point for smart context via semantic RAG and graceful out-of-scope handling
+1. The **Intent Analyzer** - two-stage entry point: (a) 4-way intent classification with entity resolution and semantic STM, (b) a serial dynamic parameter-mapping gate that refuses to hallucinate task parameters
 2. The **Supervisor (Hierarchical Swarm) Pattern** - the Router operates as a cyclic, closed-loop orchestrator with cross-validation
 3. The **ReAct (Reason + Act) loop** inside each specialist agent for live diagnostics
 4. The **Blocklist-First Security Pipeline** — commands are allowed by default and only stopped by explicit block rules
@@ -83,23 +83,163 @@ The original Version A architecture used **tiered allowlists** to classify comma
 
 ## 3. Intent Analyzer & Smart Context
 
-As the entry point to the swarm, the Intent Analyzer evaluates user queries to optimize the context window and handle out-of-scope requests gracefully.
+The Intent Analyzer is the **entry point** to the swarm. Every user query passes through it before any specialist agent runs. It operates in **two strictly serial stages**:
 
-### 3.1 Semantic Short-Term Memory (RAG for Conversations)
-Instead of passing the entire bloated conversation history to the Supervisor, the Intent Analyzer uses semantic embeddings:
-1. Embeds the incoming user query.
-2. Performs a semantic search against a `conversation_vectors` table (via `sqlite-vec`) to retrieve the top historical turns.
-3. Combines these semantic matches with the immediately preceding turns to ensure chronological continuity.
-This approach guarantees relevant older context is retained while minimizing token consumption.
+```
+   Stage 1: Intent Classification (4 categories, with entity resolution)
+       |
+       +-- IRRELEVANT  -> short-circuit (polite redirect, no Stage 2, no Router, no security gates)
+       +-- AMBIGUOUS   -> short-circuit with dual-mode clarification (no Stage 2 as a gate;
+       |                  Stage 2 is invoked speculatively to enrich the clarifying question)
+       +-- CONTINUATION -> Stage 2 (param mapping)
+       +-- NEW_TOPIC    -> Stage 2 (param mapping)
 
-### 3.2 Graceful Irrelevant & Ambiguous Query Handling
-For queries completely outside the scope of infrastructure operations (`IRRELEVANT` intent), or queries that lack specific project/system context (`AMBIGUOUS` intent, e.g., "my database"), the system does not execute the specialist agents or downstream RAG pipelines. Instead:
-- If `IRRELEVANT`, the Intent Analyzer generates a polite, clarifying question attempting to map the user's query to a valid infrastructure concept.
-- If `AMBIGUOUS`, the Intent Analyzer immediately halts and asks the user to clarify which specific system or project they are referring to. This prevents the downstream RAG from hallucinating mismatched ADRs based purely on generic keyword hits.
-- The graph routes directly out of the swarm to output this clarifying question, allowing the user to provide necessary context before investigation begins.
+   Stage 2: Dynamic Parameter Mapping (No-Hallucination Gate)
+       |
+       +-- All required params resolved -> proceed to Supervisor Router
+       +-- Any required param missing   -> short-circuit (MISSING_PARAMS) with a single bundled clarifying question
+```
 
-### 3.3 Entity Resolution (Shorthand Mapping)
-To improve operational accuracy, the Intent Analyzer automatically resolves partial or shorthand infrastructure names in user queries (e.g., mapping "abc" to "abc-dev-002-mumbai" or "cart" to "lowerground_cart_app"). It validates these shorthands against the auto-discovered `EnvironmentProfile` and outputs a `resolved_query`. This ensures that downstream agents (Cloud Engineer, OS Engineer) always execute commands against exact, fully qualified resource identifiers without requiring the user to type them perfectly.
+Short-circuit branches (`IRRELEVANT`, `AMBIGUOUS`, `MISSING_PARAMS`) bypass the swarm and the Blocklist-First Security Pipeline entirely — there is **nothing to gate** because no command is being formulated. The user-facing clarifying question is emitted directly and the graph exits to the user via Security Review's pass-through path.
+
+### 3.1 Stage 1 — Intent Classification (4 Categories)
+
+Every query is classified into **exactly one** of the four categories below. The categorical decision drives whether Stage 2 runs and whether the swarm executes at all.
+
+| Intent | Definition | Downstream behavior |
+|---|---|---|
+| **CONTINUATION** | A follow-up that depends on the active investigation's context (e.g., "now check the cloud side", "what about the previous host?"). | Proceed to Stage 2. Semantic STM context is loaded so prior turns can resolve params. |
+| **NEW_TOPIC** | A valid infrastructure / DevOps / FinOps question that is unrelated to the current investigation. | Proceed to Stage 2. STM context is cleared so the Router starts fresh. |
+| **AMBIGUOUS** | A plausible infra query that lacks the resource/system anchor needed to disambiguate (e.g., "is my database slow?" with no project specified; "restart the service" when multiple services are in play). | Short-circuit with the **dual-mode clarification** described in §3.2.2. |
+| **IRRELEVANT** | A query completely outside the scope of cloud / OS / DevOps / FinOps operations (e.g., "how do I bake a cake?", greetings). | Short-circuit with a polite redirect that maps the query to the closest plausible infra concept. |
+
+Stage 1 also performs **entity resolution** (§3.4) — shorthand names are expanded against the `EnvironmentProfile` before any downstream stage sees the query, so Stage 2 and the Router always operate on canonical identifiers.
+
+### 3.2 Short-Circuit Behavior (IRRELEVANT & AMBIGUOUS)
+
+Neither intent results in a formulated command, so the Blocklist-First Security Pipeline does not run. The Intent Analyzer writes the `clarifying_question` directly into `final_output`, sets `intent_status` accordingly, and the graph exits the swarm without invoking the Router, specialist agents, or LLM Gates.
+
+#### 3.2.1 IRRELEVANT — Polite Redirect
+
+The Intent Analyzer generates a redirect that **maps the off-topic query to the closest plausible infrastructure concept** (e.g., "How do I make a cake?" → "I specialize in infrastructure operations. Did you mean baking new AMI images or setting up a deployment pipeline?"). Generic greetings produce a generic offer to help.
+
+#### 3.2.2 AMBIGUOUS — Dual-Mode Clarification (Friction Reduction)
+
+A naive AMBIGUOUS handler would simply ask "which system did you mean?" and force the user to restart the framing. That wastes a turn every time the user is actually continuing a prior thread.
+
+Instead, the Intent Analyzer does **double work** before responding:
+
+1. **Continuation hypothesis.** It speculatively invokes Stage 2 (parameter mapping) *as if the query were a CONTINUATION* of the most recent investigation. It pulls the active session's resources, time windows, and targets from STM and checks whether the ambiguous query can be coherently bound to them.
+2. **New-topic hypothesis.** It identifies the minimum parameters a *fresh* interpretation of the query would require (target system, project, time range, etc.).
+3. **Composite clarifying question.** The user-facing question offers **both paths in one ask**:
+   > "Did you mean to continue the previous investigation on `lowerground_cart_app` (last seen 5 min ago)? Or are you starting a new topic — if so, please tell me which system/project and what time window."
+
+   A one-word reply confirms continuation; otherwise the user supplies only the missing new-topic details. Either path costs one turn instead of two.
+
+The Intent Analyzer **never auto-resolves** AMBIGUOUS to CONTINUATION on its own — ambiguity is by definition something only the user can break. The dual-mode framing simply lowers the cost of the disambiguation turn. Stage 2 in this mode is purely advisory — its output enriches the clarifying question but does not enter the Router.
+
+### 3.3 Semantic Short-Term Memory (RAG for Conversations)
+
+For `CONTINUATION` intents (and for the continuation hypothesis built inside the AMBIGUOUS handler), the Intent Analyzer does not pass the full chronological conversation to the Supervisor. Instead it:
+
+1. Embeds the (resolved) user query.
+2. Semantically searches the `conversation_vectors` table (via `sqlite-vec`) for the top-K relevant historical turns.
+3. Blends those semantic matches with the immediately preceding turn for chronological continuity.
+
+This minimizes token consumption while keeping the relevant prior signal in scope. For `NEW_TOPIC`, STM context is intentionally cleared so the Router does not bias on a stale incident.
+
+### 3.4 Entity Resolution (Shorthand Mapping)
+
+Users routinely refer to resources by partial or informal names ("cart", "abc"). The Intent Analyzer cross-references the query against the auto-discovered `EnvironmentProfile` and emits a `resolved_query` with every shorthand expanded to its canonical name (e.g., `cart` → `lowerground_cart_app`, `abc` → `abc-dev-002-mumbai`).
+
+Shorthand expansion happens as part of Stage 1 so that Stage 2's parameter mapping and the downstream Router both operate exclusively on canonical identifiers — never on guesses.
+
+### 3.5 Stage 2 — Dynamic Parameter Mapping (No-Hallucination Gate)
+
+Once Stage 1 returns `CONTINUATION` or `NEW_TOPIC`, the Intent Analyzer runs a **second, serial** LLM step that guarantees the downstream agents have every concrete parameter they need — and that **none of those parameters were guessed**.
+
+This stage is **strictly sequential** after Stage 1 for three reasons:
+- `IRRELEVANT` queries must never spend tokens or latency on parameter inference.
+- `AMBIGUOUS` queries use Stage 2 only as an advisory continuation-hypothesis check (§3.2.2), not as a gate.
+- `CONTINUATION` queries depend on knowing they *are* continuations, so the semantic STM context can be consulted as a resolution source and prior params are not re-asked.
+
+#### 3.5.1 What the stage does
+
+1. **Task inference.** The LLM names the underlying infrastructure action implied by the query (e.g., "restart a systemd service", "fetch CPU metrics for a VM", "scale a GKE deployment", "diagnose 5xx spike", "investigate billing anomaly"). One sentence → `task_summary`.
+2. **Dynamic requirement detection.** The required parameter set is **derived per query**, not from a static schema. The minimum set varies by task:
+    - A `restart` needs: target host/service identifier.
+    - A metric query needs: target resource (and a time window unless a sensible default is explicit).
+    - A scale op needs: target deployment + replica count.
+    - A cost analysis needs: project/account + time range.
+    - A log fetch needs: log source + filter or time range.
+
+    Only parameters *strictly required to act safely* are listed. Optional context is never demanded.
+3. **Resolution from available sources, in this priority order:**
+    1. The resolved user query (Stage 1 output).
+    2. The conversation history (semantic + recent STM blend from §3.3) — this is **why Stage 2 is serial after Stage 1**, so `CONTINUATION` queries can inherit params from prior turns instead of re-asking.
+    3. The `EnvironmentProfile` for canonical resource names.
+
+    A parameter that cannot be resolved from any of these sources is **marked missing**. Values are **never** fabricated, defaulted, or extrapolated.
+4. **Gate decision.**
+    - **All required params present** → state is enriched with `task_summary` and `required_parameters`; execution flows to the Supervisor Router as normal.
+    - **Any required param missing** → intent is downgraded to `MISSING_PARAMS`, the swarm is halted, and a **single concise clarifying question** is returned that bundles every missing item into one ask. No specialist agent runs, no command is formulated, no LLM Gate or HITL is invoked.
+
+#### 3.5.2 CONTINUATION vs NEW_TOPIC behavior
+
+- **NEW_TOPIC** is the common case for this gate: a fresh query with no prior context, so the resolved query is the only realistic source. Missing params here are expected and surface as a single bundled clarifying question on the very first turn.
+- **CONTINUATION** typically resolves all params from STM and proceeds without re-asking. Occasionally a continuation introduces a genuinely new parameter the prior turns did not specify (e.g., "now do the same but for the last 24h" when no time window was previously set); in those rare cases the gate halts and asks only for the truly new missing piece.
+
+#### 3.5.3 State outputs produced by Stage 2
+
+- `task_summary` — one-sentence description of the inferred task.
+- `required_parameters` — list of `{name, description, present, value, source}` entries describing every parameter the task needs and where it was resolved from (`user_query` | `conversation` | `env_profile` | `missing`).
+- `missing_parameters` — names of required parameters that could not be resolved.
+- `intent_status = MISSING_PARAMS` and `clarifying_question` are populated whenever the gate halts the swarm.
+
+This gate provides a hard guarantee that no specialist agent ever formulates a command against hallucinated identifiers, time windows, or resource targets.
+
+### 3.6 End-to-End Flow
+
+```
+                       user_query (raw)
+                              |
+                              v
+                  +---------------------------+
+                  |  Stage 1: Classify         |
+                  |  + shorthand resolution    |
+                  +---------------------------+
+                   /        |          |        \
+            IRRELEVANT   AMBIGUOUS   CONT.    NEW_TOPIC
+                |           |          |          |
+                |           |          |          |
+                |    (Stage 2 run      |          |
+                |     speculatively    |          |
+                |     for continuation |          |
+                |     hypothesis only) |          |
+                |           |          v          v
+                |           |    +-----------------------+
+                |           |    | Stage 2: Param Mapping |
+                |           |    | (No-Hallucination Gate)|
+                |           |    +-----------------------+
+                |           |          /            \
+                |           |   all-resolved      missing
+                |           |        |                |
+                v           v        v                v
+            redirect    dual-mode  Supervisor    MISSING_PARAMS
+            short-Q     short-Q    Router        short-Q
+                \           \        |               /
+                 \           \       v              /
+                  \           \  specialist agents /
+                   \           \     |            /
+                    \           \    v           /
+                     \           \  Security    /
+                      \           \  Review    /
+                       \           \  / END   /
+                        +-----------v---------+
+                                  END
+```
+
+Only the `Supervisor Router → specialist agents → security gates` path involves command execution and therefore the Blocklist-First Security Pipeline. All three short-circuit paths (`IRRELEVANT`, `AMBIGUOUS`, `MISSING_PARAMS`) emit a clarifying question directly and exit the swarm — security gating is unnecessary because no command was ever formulated.
 
 ## 4. Supervisor Router Architecture
 
