@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     credential_secret: str = "change-this-to-a-strong-random-secret"
     jwt_secret_key: str = "change-this-to-a-strong-random-jwt-secret"
     jwt_expiration_minutes: int = 1440  # 24 hours
-    admin_password: str = "admin123"    # Default fallback if not provided
+    admin_password: str = "VCE-HQ#2026"  # PRD §7.1 default — override via VCE_ADMIN_PASSWORD
 
     # Command execution (The Hands)
     cmd_max_iterations: int = 5

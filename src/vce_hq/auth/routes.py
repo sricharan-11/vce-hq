@@ -1,6 +1,6 @@
 import sqlite3
 import uuid
-from typing import Annotated, List
+from typing import Annotated, List, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -10,6 +10,9 @@ from vce_hq.auth.dependencies import get_auth_db, get_current_admin_user, get_cu
 from vce_hq.auth.security import create_access_token, get_password_hash, verify_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+UserRole = Literal["admin", "user"]
 
 
 class Token(BaseModel):
@@ -25,7 +28,7 @@ class ChangePasswordRequest(BaseModel):
 class CreateUserRequest(BaseModel):
     username: str
     password: str
-    role: str = "user"
+    role: UserRole = "user"
 
 
 @router.post("/login", response_model=Token)

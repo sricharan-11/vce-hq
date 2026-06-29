@@ -109,7 +109,7 @@ Every query is classified into **exactly one** of the four categories below. The
 | Intent | Definition | Downstream behavior |
 |---|---|---|
 | **CONTINUATION** | A follow-up that depends on the active investigation's context (e.g., "now check the cloud side", "what about the previous host?"). | Proceed to Stage 2. Semantic STM context is loaded so prior turns can resolve params. |
-| **NEW_TOPIC** | A valid infrastructure / DevOps / FinOps question that is unrelated to the current investigation. | Proceed to Stage 2. STM context is cleared so the Router starts fresh. |
+| **NEW_TOPIC** | A valid infrastructure / DevOps / FinOps question that is unrelated to the current investigation. | Proceed to Stage 2. STM context is cleared so the Router starts fresh |
 | **AMBIGUOUS** | A plausible infra query that lacks the resource/system anchor needed to disambiguate (e.g., "is my database slow?" with no project specified; "restart the service" when multiple services are in play). | Short-circuit with the **dual-mode clarification** described in §3.2.2. |
 | **IRRELEVANT** | A query completely outside the scope of cloud / OS / DevOps / FinOps operations (e.g., "how do I bake a cake?", greetings). | Short-circuit with a polite redirect that maps the query to the closest plausible infra concept. |
 
@@ -137,6 +137,7 @@ Instead, the Intent Analyzer does **double work** before responding:
    A one-word reply confirms continuation; otherwise the user supplies only the missing new-topic details. Either path costs one turn instead of two.
 
 The Intent Analyzer **never auto-resolves** AMBIGUOUS to CONTINUATION on its own — ambiguity is by definition something only the user can break. The dual-mode framing simply lowers the cost of the disambiguation turn. Stage 2 in this mode is purely advisory — its output enriches the clarifying question but does not enter the Router.
+In this case, user can sometime select a path and add more details relevant to that path. 
 
 ### 3.3 Semantic Short-Term Memory (RAG for Conversations)
 
@@ -145,8 +146,10 @@ For `CONTINUATION` intents (and for the continuation hypothesis built inside the
 1. Embeds the (resolved) user query.
 2. Semantically searches the `conversation_vectors` table (via `sqlite-vec`) for the top-K relevant historical turns.
 3. Blends those semantic matches with the immediately preceding turn for chronological continuity.
+Continuation doesn't mean it should always go to Router node, sometimes maybe 9/10 parameters are fetched and for missing param, it can go back to user to get clarification if required, but just that it happens rare in CONTINUATION mode. 
 
-This minimizes token consumption while keeping the relevant prior signal in scope. For `NEW_TOPIC`, STM context is intentionally cleared so the Router does not bias on a stale incident.
+This minimizes token consumption while keeping the relevant prior signal in scope. 
+For `NEW_TOPIC`, STM context is intentionally cleared so the Router does not bias on a stale incident.
 
 ### 3.4 Entity Resolution (Shorthand Mapping)
 
@@ -172,8 +175,9 @@ This stage is **strictly sequential** after Stage 1 for three reasons:
     - A scale op needs: target deployment + replica count.
     - A cost analysis needs: project/account + time range.
     - A log fetch needs: log source + filter or time range.
+    - the above are just for reference, but LLM has to interpret it and figure it out 
 
-    Only parameters *strictly required to act safely* are listed. Optional context is never demanded.
+    Only parameters *strictly required to act safely* are listed. Optional context is demanded based on the requirement. 
 3. **Resolution from available sources, in this priority order:**
     1. The resolved user query (Stage 1 output).
     2. The conversation history (semantic + recent STM blend from §3.3) — this is **why Stage 2 is serial after Stage 1**, so `CONTINUATION` queries can inherit params from prior turns instead of re-asking.
