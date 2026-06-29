@@ -665,7 +665,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!currentTenant) return;
         
         try {
-            const response = await authFetch('/finops/usage', {
+            const response = await authFetch('/finops/token-usage', {
                 headers: { 'X-Tenant-ID': currentTenant }
             });
             

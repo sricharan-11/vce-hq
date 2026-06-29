@@ -1,13 +1,30 @@
 document.addEventListener('DOMContentLoaded', () => {
+    // Trace viewer requires an authenticated session; bounce to login otherwise.
+    if (!localStorage.getItem('vce_token')) {
+        window.location.href = '/ui/';
+        return;
+    }
     fetchRequests();
 });
+
+function authHeaders(tenantId) {
+    const token = localStorage.getItem('vce_token');
+    return {
+        'X-Tenant-ID': tenantId,
+        'Authorization': token ? `Bearer ${token}` : ''
+    };
+}
 
 async function fetchRequests() {
     const tenantId = document.getElementById('tenantInput').value || 'default';
     try {
         const response = await fetch('/api/trace/requests', {
-            headers: { 'X-Tenant-ID': tenantId }
+            headers: authHeaders(tenantId)
         });
+        if (response.status === 401) {
+            window.location.href = '/ui/';
+            return;
+        }
         const data = await response.json();
         if (response.ok) {
             renderSidebar(data.requests);
@@ -56,8 +73,12 @@ async function loadTrace(requestId, element) {
     try {
         const tenantId = document.getElementById('tenantInput').value || 'default';
         const response = await fetch(`/api/trace/${requestId}`, {
-            headers: { 'X-Tenant-ID': tenantId }
+            headers: authHeaders(tenantId)
         });
+        if (response.status === 401) {
+            window.location.href = '/ui/';
+            return;
+        }
         const data = await response.json();
         if (response.ok) {
             renderTimeline(data.timeline);
