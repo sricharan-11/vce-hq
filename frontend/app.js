@@ -86,7 +86,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function handleLogout() {
         localStorage.removeItem('vce_token');
-        sessionStorage.removeItem('vce_session_id');
+        localStorage.removeItem('vce_session_id');
         currentSessionId = null;
         document.getElementById('loginView').style.display = 'flex';
         document.querySelector('.app-container').style.display = 'none';
@@ -228,7 +228,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- New Chat ---
     document.getElementById('newChatBtn').addEventListener('click', () => {
-        sessionStorage.removeItem('vce_session_id');
+        localStorage.removeItem('vce_session_id');
         currentSessionId = null;
         chatHistory.innerHTML = '';
         appendMessage(`<h2>Welcome to VCE-HQ Swarm</h2><p>I am your autonomous infrastructure operations advisor. You can ask me to analyze alerts, debug issues across Kubernetes, AWS, or GCP, and generate root-cause analyses.</p><p><em>Be sure to add your service accounts to <strong>The Vault</strong> first so I can safely retrieve live logs and metrics during diagnosis!</em></p>`, 'agent');
@@ -238,7 +238,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const queryInput = document.getElementById('queryInput');
     const sendQueryBtn = document.getElementById('sendQueryBtn');
     const chatHistory = document.getElementById('chatHistory');
-    let currentSessionId = sessionStorage.getItem('vce_session_id') || null;
+    let currentSessionId = localStorage.getItem('vce_session_id') || null;
 
     // Restore chat history on page load
     async function restoreSession() {
@@ -273,7 +273,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 // Session not found — clear stale reference
                 currentSessionId = null;
-                sessionStorage.removeItem('vce_session_id');
+                localStorage.removeItem('vce_session_id');
             }
         } catch(e) {
             console.error('Failed to restore session', e);
@@ -315,7 +315,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Track session for multi-turn conversations
             if (data.session_id) {
                 currentSessionId = data.session_id;
-                sessionStorage.setItem('vce_session_id', currentSessionId);
+                localStorage.setItem('vce_session_id', currentSessionId);
             }
 
             if(response.ok) {
