@@ -99,7 +99,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Navigation ---
     const navLinks = document.querySelectorAll('.nav-links li');
-    const views = document.querySelectorAll('.view, .main-content'); // Include settings main contents
+    const views = document.querySelectorAll('.view');
 
     navLinks.forEach(link => {
         link.addEventListener('click', () => {
@@ -110,10 +110,8 @@ document.addEventListener('DOMContentLoaded', () => {
             views.forEach(v => {
                 if (v.id === targetViewId) {
                     v.classList.remove('hidden');
-                    v.style.display = v.tagName.toLowerCase() === 'main' ? 'block' : 'flex';
                 } else {
                     v.classList.add('hidden');
-                    if (v.tagName.toLowerCase() === 'main') v.style.display = 'none';
                 }
             });
 
