@@ -126,7 +126,7 @@ async def analyze_query(
 
     try:
         # Probe the environment (cached with 1-hour TTL)
-        env_profile = await get_environment_profile()
+        env_profile = await get_environment_profile(tenant_id, credential_manager)
         logger.info(
             "Environment probe: ssh_method=%s iap=%s vms=%d",
             env_profile.ssh_method, env_profile.iap_available,
@@ -210,7 +210,7 @@ async def approve_hitl(
         raise HTTPException(status_code=404, detail="Session not found")
 
     try:
-        env_profile = await get_environment_profile()
+        env_profile = await get_environment_profile(tenant_id, credential_manager)
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
         from vce_hq.config import get_settings
         app_settings = get_settings()

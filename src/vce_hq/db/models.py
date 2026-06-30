@@ -49,6 +49,7 @@ class AgentType(StrEnum):
     CLOUD_ENGINEER = "cloud_engineer"
     FINOPS_AGENT = "finops_agent"
     SECURITY_REVIEW = "security_review"
+    INTENT_ANALYZER = "intent_analyzer"
 
 
 class IncidentStatus(StrEnum):

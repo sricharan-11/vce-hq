@@ -32,7 +32,7 @@ from vce_hq.llm_factory import get_llm
 from vce_hq.agents.state import AgentState
 from vce_hq.cache_manager import cache_manager
 from vce_hq.config import settings
-from vce_hq.db.models import AgentType, TokenUsageRecord
+from vce_hq.db.models import AgentType, TokenUsageRecord, ConversationTurn
 from vce_hq.db.short_term import ShortTermMemory
 
 logger = logging.getLogger(__name__)
@@ -420,6 +420,12 @@ def create_intent_analyzer_node(
             state["user_query"] = resolved_query
 
         logger.info("Intent: %s. Reasoning: %s", intent, reasoning)
+        stm.add_turn(ConversationTurn(
+            session_id=session_id,
+            request_id=state.get("request_id"),
+            agent=AgentType.INTENT_ANALYZER,
+            content=f"[INTENT CLASSIFICATION]: {intent}\n[REASONING]: {reasoning}"
+        ))
 
         _clear_transient_state(state)
 

@@ -22,9 +22,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+
+from vce_hq.vault.manager import CredentialManager
+from vce_hq.vault.credential_resolver import resolve_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +158,7 @@ _IAP_CIDR = "35.235.240.0/20"
 
 
 async def _run_probe_command(
-    cmd: str, timeout: int = 15
+    cmd: str, timeout: int = 15, env_overrides: dict[str, str] | None = None
 ) -> tuple[str, str, int]:
     """Run a single probe command and return (stdout, stderr, exit_code).
 
@@ -162,11 +166,15 @@ async def _run_probe_command(
     should never crash the application.
     """
     try:
+        merged_env = os.environ.copy()
+        if env_overrides:
+            merged_env.update(env_overrides)
         process = await asyncio.create_subprocess_shell(
             cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             executable="/bin/sh",
+            env=merged_env,
         )
         stdout, stderr = await asyncio.wait_for(
             process.communicate(), timeout=timeout
@@ -182,7 +190,7 @@ async def _run_probe_command(
         return "", f"Probe failed: {e}", -1
 
 
-async def probe_environment() -> EnvironmentProfile:
+async def probe_environment(env_overrides: dict[str, str] | None = None) -> EnvironmentProfile:
     """Run all discovery probes and build an EnvironmentProfile.
 
     This function is safe to call at any time — it only runs read-only
@@ -199,7 +207,8 @@ async def probe_environment() -> EnvironmentProfile:
 
     # ── Probe 1: Current project & service account ────────────
     stdout, stderr, rc = await _run_probe_command(
-        "gcloud config get-value project 2>/dev/null"
+        "gcloud config get-value project 2>/dev/null",
+        env_overrides=env_overrides
     )
     if rc == 0 and stdout:
         profile.project_id = stdout.strip()
@@ -207,7 +216,8 @@ async def probe_environment() -> EnvironmentProfile:
         profile.probe_errors.append(f"Could not detect project: {stderr}")
 
     stdout, stderr, rc = await _run_probe_command(
-        "gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null"
+        "gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null",
+        env_overrides=env_overrides
     )
     if rc == 0 and stdout:
         profile.service_account = stdout.strip().split("\n")[0]
@@ -218,7 +228,8 @@ async def probe_environment() -> EnvironmentProfile:
 
     # ── Probe 2: Enabled APIs ─────────────────────────────────
     stdout, stderr, rc = await _run_probe_command(
-        "gcloud services list --enabled --format='value(name)' 2>/dev/null"
+        "gcloud services list --enabled --format='value(name)' 2>/dev/null",
+        env_overrides=env_overrides
     )
     if rc == 0 and stdout:
         profile.enabled_apis = [
@@ -229,7 +240,8 @@ async def probe_environment() -> EnvironmentProfile:
 
     # ── Probe 3: Firewall rules (detect IAP & internal SSH) ───
     stdout, stderr, rc = await _run_probe_command(
-        "gcloud compute firewall-rules list --format=json 2>/dev/null"
+        "gcloud compute firewall-rules list --format=json 2>/dev/null",
+        env_overrides=env_overrides
     )
     if rc == 0 and stdout:
         try:
@@ -282,7 +294,8 @@ async def probe_environment() -> EnvironmentProfile:
         "gcloud compute instances list "
         "--filter='status=RUNNING' "
         "--format='json(name,zone.basename(),networkInterfaces[0].networkIP)' "
-        "2>/dev/null"
+        "2>/dev/null",
+        env_overrides=env_overrides
     )
     if rc == 0 and stdout:
         try:
@@ -333,34 +346,44 @@ async def probe_environment() -> EnvironmentProfile:
     return profile
 
 
-# ── Singleton Cache ───────────────────────────────────────────
+# ── Tenant-Scoped Cache ───────────────────────────────────────
 
-_cached_profile: EnvironmentProfile | None = None
-_cache_timestamp: float = 0.0
+_cached_profiles: dict[str, tuple[EnvironmentProfile, float]] = {}
 _CACHE_TTL_SECONDS: float = 3600.0  # 1 hour
 
 
 async def get_environment_profile(
+    tenant_id: str,
+    credential_manager: CredentialManager,
     *, force_refresh: bool = False
 ) -> EnvironmentProfile:
-    """Get the cached environment profile, refreshing if stale.
+    """Get the cached environment profile for a tenant, refreshing if stale.
 
     Args:
+        tenant_id: The tenant identifier.
+        credential_manager: Manager to fetch the tenant's GCP credentials.
         force_refresh: If True, force a re-probe regardless of TTL.
 
     Returns:
         The current (possibly cached) EnvironmentProfile.
     """
-    global _cached_profile, _cache_timestamp
+    global _cached_profiles
 
     now = time.monotonic()
-    if (
-        not force_refresh
-        and _cached_profile is not None
-        and (now - _cache_timestamp) < _CACHE_TTL_SECONDS
-    ):
-        return _cached_profile
+    
+    if not force_refresh and tenant_id in _cached_profiles:
+        profile, timestamp = _cached_profiles[tenant_id]
+        if (now - timestamp) < _CACHE_TTL_SECONDS:
+            return profile
 
-    _cached_profile = await probe_environment()
-    _cache_timestamp = now
-    return _cached_profile
+    # Retrieve all tenant credentials (decrypted) and resolve env vars
+    available_credentials = credential_manager.list_credentials_with_plaintext()
+    
+    # We use a dummy command 'gcloud' just to resolve the correct credentials
+    # which sets GOOGLE_APPLICATION_CREDENTIALS if a GCP credential exists.
+    with resolve_credentials("gcloud", available_credentials) as env_overrides:
+        profile = await probe_environment(env_overrides)
+        
+    _cached_profiles[tenant_id] = (profile, now)
+    return profile
+

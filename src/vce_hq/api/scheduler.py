@@ -54,7 +54,7 @@ async def run_finops_analysis(job_type: str, query: str) -> None:
             credential_manager = CredentialManager(conn, tenant_id)
 
             # Live discovery for the scheduled report (no cache reuse)
-            env_profile = await get_environment_profile()
+            env_profile = await get_environment_profile(tenant_id, credential_manager, force_refresh=True)
 
             # Create a synthetic session
             session = Session(tenant_id=tenant_id)
