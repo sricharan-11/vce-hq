@@ -296,20 +296,21 @@ class ShortTermMemory:
             (session_id, json.dumps(query_embedding), limit),
         ).fetchall()
 
-        # Fetch the absolute latest turn to ensure immediate context
-        latest_row = self._conn.execute(
+        # Fetch the most recent turns to ensure immediate conversational context
+        # (needs more than 1 to capture the system's prior response, not just the user's latest query)
+        latest_rows = self._conn.execute(
             """
             SELECT * FROM conversation_turns 
             WHERE session_id = ? 
-            ORDER BY created_at DESC LIMIT 1
+            ORDER BY created_at DESC LIMIT 3
             """,
             (session_id,),
-        ).fetchone()
+        ).fetchall()
 
         # Combine, avoiding duplicates, and sort chronologically
         turn_dict = {}
-        if latest_row:
-            turn_dict[latest_row["turn_id"]] = latest_row
+        for row in latest_rows:
+            turn_dict[row["turn_id"]] = row
             
         for row in semantic_rows:
             turn_dict[row["turn_id"]] = row
