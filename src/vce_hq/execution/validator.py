@@ -675,7 +675,28 @@ def validate_command(command: str, domain: CommandDomain) -> ValidationResult:
             )
 
     # ── Stage 4: Injection Sanitization ────────────────────────
-    sanitization_issue = _check_injection(command)
+    is_ssh = domain == CommandDomain.OS and command.startswith("gcloud compute ssh")
+    sanitization_issue = None
+
+    if is_ssh:
+        # Check outer command for injection (replaces inner payload safely)
+        outer_command = re.sub(r'--command=["\'].*?["\']', '--command="REDACTED"', command, flags=re.DOTALL)
+        sanitization_issue = _check_injection(outer_command)
+        
+        if not sanitization_issue:
+            # Check inner payload for injection. If present, escalate to LLM gate
+            # instead of blindly rejecting, allowing the smart gate to evaluate it.
+            inner_match = re.search(r'--command=["\'](.*?)["\']', command, flags=re.DOTALL)
+            if inner_match:
+                inner_cmd = inner_match.group(1).strip()
+                inner_issue = _check_injection(inner_cmd)
+                if inner_issue:
+                    if risk_signal == RiskSignal.NONE:
+                        risk_signal = RiskSignal.ELEVATED
+                    logger.info("SSH inner injection detected ('%s'), escalating risk to ELEVATED.", inner_issue)
+    else:
+        sanitization_issue = _check_injection(command)
+
     if sanitization_issue:
         logger.warning(
             "Command REJECTED (sanitization) | domain=%s cmd='%s' reason='%s'",
