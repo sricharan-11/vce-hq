@@ -237,6 +237,11 @@ def create_router_node(
         if state.get("finops_analysis"):
             messages.append(("human", f"FinOps Agent Output:\n{state['finops_analysis']}"))
 
+        if state.get("task_summary"):
+            messages.append(("human", f"Inferred Task:\n{state['task_summary']}"))
+        if state.get("required_parameters"):
+            messages.append(("human", f"Resolved Parameters:\n{json.dumps(state['required_parameters'], indent=2)}"))
+
         messages.append(("human", user_message))
 
         try:
