@@ -11,17 +11,19 @@ from vce_hq.config import settings
 logger = logging.getLogger(__name__)
 
 
-def get_llm(**kwargs: Any) -> BaseChatModel:
+def get_llm(provider: str | None = None, model_name: str | None = None, **kwargs: Any) -> BaseChatModel:
     """Instantiate a chat model based on the configured provider.
     
     Args:
+        provider: Optional override for the LLM provider.
+        model_name: Optional override for the LLM model name.
         **kwargs: Additional arguments to pass to the model (e.g. temperature).
         
     Returns:
         A Langchain BaseChatModel instance.
     """
-    provider = settings.llm_provider.lower()
-    model_name = settings.llm_model
+    provider = (provider or settings.llm_provider).lower()
+    model_name = model_name or settings.llm_model
 
     # Mapping custom provider names to Langchain supported provider strings
     langchain_provider = provider

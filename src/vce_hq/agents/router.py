@@ -175,7 +175,11 @@ def create_router_node(
         llm_kwargs["cached_content"] = cache_name
 
     # Instantiate LLM dynamically
-    llm = get_llm(**llm_kwargs)
+    llm = get_llm(
+        provider=settings.router_llm_provider,
+        model_name=settings.router_llm_model,
+        **llm_kwargs
+    )
     stm = ShortTermMemory(conn)
 
     async def router_node(state: AgentState) -> AgentState:

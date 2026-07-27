@@ -273,7 +273,11 @@ def create_intent_analyzer_node(
         }
         if cache_name:
             kwargs["cached_content"] = cache_name
-        return get_llm(**kwargs)
+        return get_llm(
+            provider=settings.intent_analyzer_llm_provider,
+            model_name=settings.intent_analyzer_llm_model,
+            **kwargs
+        )
 
     intent_llm = _build_llm(intent_cache_name)
     param_llm = _build_llm(param_cache_name)

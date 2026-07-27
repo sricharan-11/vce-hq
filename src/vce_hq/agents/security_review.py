@@ -123,7 +123,11 @@ def create_security_review_node(
     if cache_name:
         llm_kwargs["cached_content"] = cache_name
 
-    llm = get_llm(**llm_kwargs)
+    llm = get_llm(
+        provider=settings.security_review_llm_provider,
+        model_name=settings.security_review_llm_model,
+        **llm_kwargs
+    )
     
     stm = ShortTermMemory(conn)
 

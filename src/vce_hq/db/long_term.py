@@ -307,7 +307,7 @@ class LongTermMemory:
                 category=row["category"],
                 source_document=row["source_document"],
                 distance=row["distance"],
-                metadata=json.loads(row["metadata_json"]) if row["metadata_json"] else {},
+                metadata={"tags": json.loads(row["metadata_json"])} if row["metadata_json"] else {},
             )
             for row in rows
         ]

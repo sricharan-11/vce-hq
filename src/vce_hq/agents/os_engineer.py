@@ -175,7 +175,11 @@ def create_os_engineer_node(
     if cache_name:
         llm_kwargs["cached_content"] = cache_name
 
-    llm = get_llm(**llm_kwargs)
+    llm = get_llm(
+        provider=settings.os_engineer_llm_provider,
+        model_name=settings.os_engineer_llm_model,
+        **llm_kwargs
+    )
 
     stm = ShortTermMemory(conn)
 

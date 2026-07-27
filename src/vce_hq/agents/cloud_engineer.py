@@ -156,7 +156,11 @@ def create_cloud_engineer_node(
     if cache_name:
         llm_kwargs["cached_content"] = cache_name
     
-    llm = get_llm(**llm_kwargs)
+    llm = get_llm(
+        provider=settings.cloud_engineer_llm_provider,
+        model_name=settings.cloud_engineer_llm_model,
+        **llm_kwargs
+    )
 
     stm = ShortTermMemory(conn)
 

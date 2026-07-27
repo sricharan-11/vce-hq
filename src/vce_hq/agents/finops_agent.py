@@ -138,7 +138,11 @@ def create_finops_agent_node(
         llm_kwargs["cached_content"] = cache_name
     
     # Instantiate LLM dynamically
-    llm = get_llm(**llm_kwargs)
+    llm = get_llm(
+        provider=settings.finops_agent_llm_provider,
+        model_name=settings.finops_agent_llm_model,
+        **llm_kwargs
+    )
 
     stm = ShortTermMemory(conn)
 

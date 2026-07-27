@@ -31,3 +31,9 @@ data/
 .DS_Store
 Thumbs.dbserver.log
 server.log
+
+
+PRD*
+arch.md
+
+*.gz

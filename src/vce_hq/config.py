@@ -62,9 +62,28 @@ class Settings(BaseSettings):
     # Custom API Base (useful for OpenAI-compatible providers like DeepSeek, Qwen)
     openai_api_base: str | None = Field(default=None, validation_alias=AliasChoices('vce_openai_api_base', 'openai_api_base'))
 
-    # LLM Configuration
+    # Default LLM Configuration
     llm_provider: str = "google_genai"
     llm_model: str = "gemini-3.1-pro"
+
+    # Agent-Specific LLM Configuration (Overrides Default)
+    intent_analyzer_llm_provider: str | None = None
+    intent_analyzer_llm_model: str | None = None
+    
+    router_llm_provider: str | None = None
+    router_llm_model: str | None = None
+    
+    os_engineer_llm_provider: str | None = None
+    os_engineer_llm_model: str | None = None
+    
+    cloud_engineer_llm_provider: str | None = None
+    cloud_engineer_llm_model: str | None = None
+    
+    finops_agent_llm_provider: str | None = None
+    finops_agent_llm_model: str | None = None
+    
+    security_review_llm_provider: str | None = None
+    security_review_llm_model: str | None = None
 
     # Embeddings Configuration
     embedding_provider: str = "google_genai"
