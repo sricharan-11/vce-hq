@@ -94,6 +94,7 @@ Please give a short, succinct context to situate this chunk within the overall d
         content: str,
         category: KnowledgeCategory,
         metadata: dict | None = None,
+        uploader: dict | None = None,
     ) -> IngestionStats:
         """Ingest a knowledge document into the vector store.
 
@@ -106,11 +107,14 @@ Please give a short, succinct context to situate this chunk within the overall d
             content: The full text of the document.
             category: The knowledge category (ADR, runbook, etc.).
             metadata: Optional metadata dict attached to each chunk.
+            uploader: Optional uploader identity (username, id, content
+                sha256, timestamp). Stamped into each chunk's metadata so
+                the RAG corpus can be audited for who inserted what.
 
         Returns:
             Statistics about the ingestion operation.
         """
-        metadata = metadata or {}
+        metadata = {**(metadata or {}), **(uploader or {})}
 
         # Step 1: Delete existing chunks for this document (idempotent re-ingestion)
         replaced = self._ltm.delete_knowledge_by_document(document_name)

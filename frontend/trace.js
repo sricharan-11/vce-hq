@@ -1,17 +1,19 @@
 document.addEventListener('DOMContentLoaded', () => {
-    // Trace viewer requires an authenticated session; bounce to login otherwise.
-    if (!localStorage.getItem('vce_token')) {
+    // Check auth endpoint to see if we have a valid session cookie
+    fetch('/auth/me', { credentials: 'same-origin' }).then(res => {
+        if (!res.ok) {
+            window.location.href = '/ui/';
+            return;
+        }
+        fetchRequests();
+    }).catch(() => {
         window.location.href = '/ui/';
-        return;
-    }
-    fetchRequests();
+    });
 });
 
 function authHeaders(tenantId) {
-    const token = localStorage.getItem('vce_token');
     return {
-        'X-Tenant-ID': tenantId,
-        'Authorization': token ? `Bearer ${token}` : ''
+        'X-Tenant-ID': tenantId
     };
 }
 
@@ -19,7 +21,8 @@ async function fetchRequests() {
     const tenantId = document.getElementById('tenantInput').value || 'default';
     try {
         const response = await fetch('/api/trace/requests', {
-            headers: authHeaders(tenantId)
+            headers: authHeaders(tenantId),
+            credentials: 'same-origin'
         });
         if (response.status === 401) {
             window.location.href = '/ui/';
@@ -73,7 +76,8 @@ async function loadTrace(requestId, element) {
     try {
         const tenantId = document.getElementById('tenantInput').value || 'default';
         const response = await fetch(`/api/trace/${requestId}`, {
-            headers: authHeaders(tenantId)
+            headers: authHeaders(tenantId),
+            credentials: 'same-origin'
         });
         if (response.status === 401) {
             window.location.href = '/ui/';
@@ -131,7 +135,7 @@ function renderTimeline(events) {
         } else if (event.type === 'token_usage') {
             bodyHtml = `
                 <div style="display: flex; gap: 20px; color: #8b949e;">
-                    <div>Model: <span style="color: #c9d1d9">${event.model_name}</span></div>
+                    <div>Model: <span style="color: #c9d1d9">${escapeHtml(event.model_name)}</span></div>
                     <div>Prompt: <span style="color: #c9d1d9">${event.prompt_tokens}</span></div>
                     <div>Completion: <span style="color: #c9d1d9">${event.completion_tokens}</span></div>
                     <div>Total: <span style="font-weight: bold; color: #d29922">${event.total_tokens}</span></div>
@@ -141,7 +145,7 @@ function renderTimeline(events) {
 
         card.innerHTML = `
             <div class="card-header">
-                <span class="agent-badge ${event.agent}">${event.agent.toUpperCase()}</span>
+                <span class="agent-badge ${escapeHtml(event.agent)}">${escapeHtml(event.agent).toUpperCase()}</span>
                 <span>${date}</span>
             </div>
             <div class="card-body">

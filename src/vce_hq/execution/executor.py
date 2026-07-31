@@ -120,27 +120,28 @@ class CommandExecutor:
         reasoning: str = "",
         use_shell: bool = False,
         original_query: str = "",
-        adrs_context: str = "",
-        skip_gate: bool = False,
-    ) -> CommandResult:
-        """Validate and execute a command.
+            adrs_context: str = "",
+            gate_ticket: str | None = None,
+            tenant_id: str = "unknown",
+        ) -> CommandResult:
+            """Validate and execute a command.
 
-        The full flow:
-            1. Validate against blocklist system
-            2. Execute as subprocess with timeout
-            3. Capture and truncate output
-            4. Return structured result
+            The full flow:
+                1. Validate against blocklist system
+                2. Execute as subprocess with timeout
+                3. Capture and truncate output
+                4. Return structured result
 
-        Args:
-            command: The command string to execute.
-            env_overrides: Additional environment variables (e.g., cloud credentials).
-                These are merged into the subprocess environment and NOT persisted.
-            reasoning: Why the agent chose to run this command (for audit).
-            use_shell: If ``True``, run the command via ``/bin/sh -c`` so that
-                the container's full PATH (including cloud CLIs) is available.
-                This is required for Cloud Engineer commands (gcloud, aws, az,
-                kubectl). OS Engineer commands run without a shell for safety.
-            skip_gate: Bypass the LLM security gate (used for approved HITL commands).
+            Args:
+                command: The command string to execute.
+                env_overrides: Additional environment variables (e.g., cloud credentials).
+                    These are merged into the subprocess environment and NOT persisted.
+                reasoning: Why the agent chose to run this command (for audit).
+                use_shell: If ``True``, run the command via ``/bin/sh -c`` so that
+                    the container's full PATH (including cloud CLIs) is available.
+                    This is required for Cloud Engineer commands (gcloud, aws, az,
+                    kubectl). OS Engineer commands run without a shell for safety.
+                gate_ticket: A signed ticket from the Security Gate or HITL approval.
 
         Returns:
             A ``CommandResult`` with captured output and metadata.
@@ -174,56 +175,88 @@ class CommandExecutor:
         risk_signal = validation.risk_signal
 
         # Pre-Execution Security Gate for ELEVATED and CRITICAL risk
-        if not skip_gate and risk_signal in (RiskSignal.ELEVATED, RiskSignal.CRITICAL):
-            logger.info("Triggering LLM Security Gate for %s risk command", risk_signal.value)
-            gate_result = await review_command(
-                command=command,
-                domain=self._domain.value,
-                risk_signal=risk_signal.value,
-                original_query=original_query,
-                reasoning=reasoning,
-                adrs_context=adrs_context,
-            )
-            
-            if gate_result.decision == GateDecision.REJECTED:
-                logger.warning(
-                    "Command execution REJECTED by Security Gate | agent=%s cmd='%s' reason='%s'",
-                    self._agent, command, gate_result.reason
-                )
-                return CommandResult(
-                    command_id=command_id,
+        gate_was_invoked = False
+        gate_decision = ""
+        
+        if risk_signal in (RiskSignal.ELEVATED, RiskSignal.CRITICAL):
+            if gate_ticket:
+                from vce_hq.auth.security import verify_gate_ticket
+                claims = verify_gate_ticket(gate_ticket, command=command, agent=self._agent, tenant_id=tenant_id)
+                if not claims:
+                    logger.warning("Invalid or expired gate ticket for command '%s'", command)
+                    return CommandResult(
+                        command_id=command_id,
+                        command=command,
+                        agent=self._agent,
+                        exit_code=-1,
+                        stdout="",
+                        stderr="SECURITY GATE REJECTED: Invalid or expired execution ticket.",
+                        duration_ms=0,
+                        validated_by="security_gate_rejected",
+                        truncated=False,
+                        risk_signal=risk_signal.value,
+                        gate_invoked=True,
+                        gate_decision="rejected",
+                    )
+                logger.info("Command '%s' execution permitted via signed gate ticket", command)
+                gate_was_invoked = True
+                gate_decision = "approved"
+            else:
+                logger.info("Triggering LLM Security Gate for %s risk command", risk_signal.value)
+                gate_result = await review_command(
                     command=command,
-                    agent=self._agent,
-                    exit_code=-1,
-                    stdout="",
-                    stderr=f"SECURITY GATE REJECTED: {gate_result.reason}",
-                    duration_ms=0,
-                    validated_by="security_gate_rejected",
-                    truncated=False,
+                    domain=self._domain.value,
                     risk_signal=risk_signal.value,
-                    gate_invoked=True,
-                    gate_decision=gate_result.decision.value,
+                    original_query=original_query,
+                    reasoning=reasoning,
+                    adrs_context=adrs_context,
+                    agent=self._agent,
+                    tenant_id=tenant_id,
                 )
                 
-            if gate_result.decision == GateDecision.REQUIRES_HITL:
-                logger.info(
-                    "Command execution REQUIRES HITL | agent=%s cmd='%s'",
-                    self._agent, command
-                )
-                return CommandResult(
-                    command_id=command_id,
-                    command=command,
-                    agent=self._agent,
-                    exit_code=-3, # Magic exit code for HITL needed
-                    stdout="",
-                    stderr=f"REQUIRES_HITL: {gate_result.reason}. Ask the user for approval.",
-                    duration_ms=0,
-                    validated_by="security_gate_hitl",
-                    truncated=False,
-                    risk_signal=risk_signal.value,
-                    gate_invoked=True,
-                    gate_decision=gate_result.decision.value,
-                )
+                gate_was_invoked = True
+                gate_decision = gate_result.decision.value
+                
+                if gate_result.decision == GateDecision.REJECTED:
+                    logger.warning(
+                        "Command execution REJECTED by Security Gate | agent=%s cmd='%s' reason='%s'",
+                        self._agent, command, gate_result.reason
+                    )
+                    return CommandResult(
+                        command_id=command_id,
+                        command=command,
+                        agent=self._agent,
+                        exit_code=-1,
+                        stdout="",
+                        stderr=f"SECURITY GATE REJECTED: {gate_result.reason}",
+                        duration_ms=0,
+                        validated_by="security_gate_rejected",
+                        truncated=False,
+                        risk_signal=risk_signal.value,
+                        gate_invoked=True,
+                        gate_decision=gate_decision,
+                    )
+                    
+                if gate_result.decision == GateDecision.REQUIRES_HITL:
+                    logger.info(
+                        "Command execution REQUIRES HITL | agent=%s cmd='%s'",
+                        self._agent, command
+                    )
+                    return CommandResult(
+                        command_id=command_id,
+                        command=command,
+                        agent=self._agent,
+                        exit_code=-3, # Magic exit code for HITL needed
+                        stdout="",
+                        stderr=f"REQUIRES_HITL: {gate_result.reason}. Ask the user for approval.",
+                        duration_ms=0,
+                        validated_by="security_gate_hitl",
+                        truncated=False,
+                        risk_signal=risk_signal.value,
+                        gate_invoked=True,
+                        gate_decision=gate_decision,
+                    )
+
 
         # ── Stage 2: Execute ──────────────────────────────────
         logger.info(
@@ -292,11 +325,11 @@ class CommandExecutor:
                     stdout="",
                     stderr=f"TIMEOUT: Command exceeded {self._timeout}s limit",
                     duration_ms=duration_ms,
-                    validated_by="blocklist_pass" if risk_signal == RiskSignal.NONE else "security_gate_approved",
+                    validated_by="blocklist_pass" if not gate_was_invoked else "security_gate_approved",
                     truncated=False,
                     risk_signal=risk_signal.value,
-                    gate_invoked=risk_signal in (RiskSignal.ELEVATED, RiskSignal.CRITICAL) and not skip_gate,
-                    gate_decision="approved" if (risk_signal in (RiskSignal.ELEVATED, RiskSignal.CRITICAL) and not skip_gate) else "",
+                    gate_invoked=gate_was_invoked,
+                    gate_decision=gate_decision,
                 )
 
             duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -305,8 +338,6 @@ class CommandExecutor:
             stdout, stderr, truncated = self._truncate_output(
                 raw_stdout, raw_stderr
             )
-
-            gate_was_invoked = risk_signal in (RiskSignal.ELEVATED, RiskSignal.CRITICAL) and not skip_gate
             result = CommandResult(
                 command_id=command_id,
                 command=command,

@@ -73,7 +73,40 @@ VCE-HQ can derive a user's role from the tenant's GCP IAM policy — see [PRD §
 6. **Grant your users VCE roles in GCP IAM** — anyone with `roles/owner` becomes a VCE admin; anyone with `roles/viewer` becomes a VCE user (mapping is configurable via `VCE_GCP_ROLE_MAP_*`).
 7. Restart: `docker compose restart vce-hq`. The login page now shows a *Sign in with Google* button.
 
-Local username/password login (`admin`) always remains available for break-glass recovery.
+### Sign in with Microsoft (Entra ID + Azure RBAC)
+
+Symmetric to GCP but the role is derived from Azure RBAC on a subscription — see [PRD §7.2.2](PRD_main_vB1.2.md).
+
+**One-time setup:**
+
+1. **Register an app** in Entra ID (Azure Portal → *App registrations*). Add a *Web* redirect URI of `https://<your-host>/auth/azure/callback`. Under *Certificates & secrets*, create a client secret.
+2. **Create a Service Principal for RBAC lookup**: either reuse the app registration above or a second one. Assign it the **Reader** built-in role on the subscription whose RBAC will govern access.
+3. **Store the SP as a JSON blob in The Vault** using credential name `azure-iam-lookup` (or your `VCE_AZURE_IAM_CREDENTIAL_NAME`):
+   ```json
+   {"tenant_id": "…", "client_id": "…", "client_secret": "…"}
+   ```
+4. **Populate `.env`**: `VCE_AZURE_TENANT_ID`, `VCE_AZURE_OAUTH_CLIENT_ID`, `VCE_AZURE_OAUTH_CLIENT_SECRET`, `VCE_AZURE_OAUTH_REDIRECT_URI`, `VCE_AZURE_SUBSCRIPTION_ID`, optional `VCE_AZURE_ALLOWED_DOMAINS`. Flip `VCE_AZURE_AUTH_ENABLED=true`.
+5. **Assign your users VCE roles in Azure RBAC** — `Owner` becomes VCE admin, `Reader`/`Contributor` become VCE user (mapping configurable via `VCE_AZURE_ROLE_MAP_*`).
+6. Restart. The login page now shows *Sign in with Microsoft*.
+
+### Sign in with AWS (IAM Identity Center + IAM policies)
+
+Symmetric to the others; role is derived from AWS IAM policies attached to the IAM user matching the OIDC email — see [PRD §7.2.3](PRD_main_vB1.2.md).
+
+**One-time setup:**
+
+1. **Register an OIDC application** in AWS IAM Identity Center → *Applications → Add custom SAML/OIDC application → OIDC*. Redirect URI: `https://<your-host>/auth/aws/callback`. Note the **Issuer URL**, **Client ID**, and **Client Secret**.
+2. **Assign users to the application** so they can complete the OIDC flow.
+3. **Create an IAM principal** (IAM user or Access Key) with permissions `iam:ListUsers`, `iam:ListAttachedUserPolicies`, `iam:ListUserPolicies`, `iam:ListGroupsForUser`, `iam:ListAttachedGroupPolicies`, `iam:ListGroupPolicies`, `iam:ListUserTags`, `iam:GetUser`. The managed policy `AWSSecurityAudit` covers all of these.
+4. **Store the credentials in The Vault** under name `aws-iam-lookup` (or your `VCE_AWS_IAM_CREDENTIAL_NAME`):
+   ```json
+   {"aws_access_key_id": "…", "aws_secret_access_key": "…", "region": "us-east-1"}
+   ```
+5. **Make sure each SSO user has a matching IAM user** — either an IAM user whose **UserName is the email**, or an IAM user with a tag `Email = user@example.com`. Attach a mapped managed policy (e.g., `AdministratorAccess` for admins, `ReadOnlyAccess` for viewers).
+6. **Populate `.env`**: `VCE_AWS_OIDC_ISSUER`, `VCE_AWS_OAUTH_CLIENT_ID`, `VCE_AWS_OAUTH_CLIENT_SECRET`, `VCE_AWS_OAUTH_REDIRECT_URI`, optional `VCE_AWS_ALLOWED_DOMAINS`. Flip `VCE_AWS_AUTH_ENABLED=true`.
+7. Restart. The login page now shows *Sign in with AWS*.
+
+Local username/password login (`admin`) always remains available for break-glass recovery, regardless of which cloud providers are enabled.
 
 ---
 

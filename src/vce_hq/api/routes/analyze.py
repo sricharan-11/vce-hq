@@ -224,10 +224,22 @@ async def approve_hitl(
             
             if request.approved:
                 # Tell the agent that the command was approved.
-                # In a full implementation, we might execute the command here or let the agent execute it.
-                # For simplicity, we just resume the graph which will go to the router.
-                pass
-                
+                # Issue a short-lived gate ticket so the executor knows it was explicitly approved by HITL
+                from vce_hq.auth.security import issue_gate_ticket
+                hitl_command = result.get("hitl_command", "")
+                if hitl_command:
+                    ticket = issue_gate_ticket(
+                        command=hitl_command,
+                        agent="hitl_approver",
+                        tenant_id=tenant_id,
+                        decision="approved",
+                    )
+                    # We inject the ticket into the state so the agent can pass it to the executor
+                    await graph.aupdate_state(
+                        config,
+                        {"hitl_pending": False, "hitl_ticket": ticket},
+                    )
+            
             result = await graph.ainvoke(None, config=config)
         
         if result.get("hitl_pending"):

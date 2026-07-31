@@ -1,7 +1,7 @@
 import sqlite3
 from typing import Annotated, Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Cookie, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 import jwt
 from pydantic import BaseModel
@@ -10,7 +10,9 @@ from vce_hq.auth.security import decode_access_token
 from vce_hq.db.connection import create_connection
 from vce_hq.config import settings
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+# auto_error=False so requests without a Bearer header don't 401 immediately —
+# we fall back to the HttpOnly session cookie for browser-based auth.
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
 
 
 class User(BaseModel):
@@ -42,19 +44,29 @@ def get_auth_db() -> sqlite3.Connection:
 
 
 async def get_current_user(
-    token: Annotated[str, Depends(oauth2_scheme)],
-    db: Annotated[sqlite3.Connection, Depends(get_auth_db)]
+    request: Request,
+    header_token: Annotated[Optional[str], Depends(oauth2_scheme)],
+    db: Annotated[sqlite3.Connection, Depends(get_auth_db)],
 ) -> User:
+    """Resolve the current user from the HttpOnly session cookie or Bearer header.
+
+    Cookie is preferred (XSS-resistant); the header path is retained so CLI
+    clients and existing `Authorization: Bearer …` callers keep working.
+    """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    
+
+    token = request.cookies.get(settings.session_cookie_name) or header_token
+    if not token:
+        raise credentials_exception
+
     payload = decode_access_token(token)
     if payload is None:
         raise credentials_exception
-        
+
     username: str = payload.get("sub")
     if username is None:
         raise credentials_exception

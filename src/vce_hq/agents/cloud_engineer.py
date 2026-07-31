@@ -192,7 +192,7 @@ def create_cloud_engineer_node(
             available_credentials = credential_manager.list_credentials_with_plaintext()
             with resolve_credentials(cmd_str, available_credentials) as env_overrides:
                 result = await executor.execute(
-                    cmd_str, env_overrides=env_overrides, reasoning="Approved via HITL", use_shell=True, skip_gate=True, original_query=query, adrs_context=context
+                    cmd_str, env_overrides=env_overrides, reasoning="Approved via HITL", use_shell=True, gate_ticket=state.get("hitl_ticket"), tenant_id=state.get("tenant_id", "unknown"), original_query=query, adrs_context=context
                 )
             
             command_log.append(result.to_dict())

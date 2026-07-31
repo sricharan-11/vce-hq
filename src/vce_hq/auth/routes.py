@@ -2,14 +2,22 @@ import sqlite3
 import uuid
 from typing import Annotated, List, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 
 from vce_hq.auth import gcp_oauth
+from vce_hq.auth import azure_oauth
+from vce_hq.auth import aws_oauth
 from vce_hq.auth.dependencies import get_auth_db, get_current_admin_user, get_current_user, User
-from vce_hq.auth.security import create_access_token, get_password_hash, verify_password
+from vce_hq.auth.security import (
+    clear_session_cookie,
+    create_access_token,
+    get_password_hash,
+    set_session_cookie,
+    verify_password,
+)
 from vce_hq.config import settings
 from vce_hq.db.connection import create_connection
 
@@ -37,6 +45,7 @@ class CreateUserRequest(BaseModel):
 
 @router.post("/login", response_model=Token)
 async def login(
+    response: Response,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: Annotated[sqlite3.Connection, Depends(get_auth_db)]
 ):
@@ -53,7 +62,21 @@ async def login(
         )
         
     access_token = create_access_token(data={"sub": user_row["username"], "role": user_row["role"]})
+    set_session_cookie(response, access_token)
+    # Token also returned in the body so CLI / OpenAPI clients still work.
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+@router.get("/me", response_model=User)
+async def me(current_user: Annotated[User, Depends(get_current_user)]) -> User:
+    """Return the currently authenticated user (used by the SPA after login)."""
+    return current_user
+
+
+@router.post("/logout")
+async def logout(response: Response):
+    clear_session_cookie(response)
+    return {"message": "Logged out"}
 
 
 @router.post("/change-password")
@@ -213,14 +236,196 @@ async def gcp_callback(
         "matched_roles": matched,
     })
 
-    # Hand token to the SPA via URL fragment (never hits server logs).
-    ui_url = f"/ui/#token={token}&role={user['role']}"
-    return RedirectResponse(url=ui_url, status_code=status.HTTP_302_FOUND)
+    return _oauth_success_redirect(token, user["role"])
+
+
+def _oauth_success_redirect(token: str, role: str) -> RedirectResponse:
+    """Set the session cookie and redirect the browser to the SPA landing page."""
+    response = RedirectResponse(
+        url=f"/ui/?login=ok&role={role}",
+        status_code=status.HTTP_302_FOUND,
+    )
+    set_session_cookie(response, token)
+    return response
 
 
 def _oauth_redirect_with_error(msg: str) -> RedirectResponse:
     import urllib.parse
     return RedirectResponse(
-        url=f"/ui/#oauth_error={urllib.parse.quote(msg)}",
+        url=f"/ui/?oauth_error={urllib.parse.quote(msg)}",
         status_code=status.HTTP_302_FOUND,
     )
+
+
+# ─── Microsoft Entra ID OIDC (PRD §7.2.2) ─────────────────────────────
+
+@router.get("/azure/config")
+async def azure_auth_config():
+    """UI polls this to decide whether to render the 'Sign in with Microsoft' button."""
+    return {
+        "enabled": settings.azure_auth_enabled,
+        "allowed_domains": settings.azure_allowed_domains_list(),
+    }
+
+
+@router.get("/azure/login")
+async def azure_login(tenant_id: str):
+    if not settings.azure_auth_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Azure auth disabled")
+    if not (
+        settings.azure_oauth_client_id
+        and settings.azure_oauth_client_secret
+        and settings.azure_tenant_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Azure OIDC is not configured (missing tenant id / client id / secret).",
+        )
+    url, _state = azure_oauth.build_authorize_url(tenant_id=tenant_id)
+    return RedirectResponse(url=url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+
+@router.get("/azure/callback")
+async def azure_callback(
+    request: Request,
+    db: Annotated[sqlite3.Connection, Depends(get_auth_db)],
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+):
+    if not settings.azure_auth_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Azure auth disabled")
+    if error:
+        return _oauth_redirect_with_error(f"Microsoft returned error: {error_description or error}")
+    if not code or not state:
+        return _oauth_redirect_with_error("Missing OAuth code or state.")
+
+    try:
+        state_payload = azure_oauth.verify_state(state)
+    except ValueError as exc:
+        return _oauth_redirect_with_error(str(exc))
+
+    tenant_id = state_payload.get("tid")
+    if not tenant_id:
+        return _oauth_redirect_with_error("State payload missing tenant id.")
+
+    try:
+        identity = await azure_oauth.exchange_code_and_verify(code)
+    except PermissionError as exc:
+        return _oauth_redirect_with_error(str(exc))
+    except Exception as exc:
+        return _oauth_redirect_with_error(f"Microsoft token exchange failed: {exc}")
+
+    tenant_conn = create_connection(settings.tenant_db_path(tenant_id))
+    try:
+        try:
+            vce_role, matched = await azure_oauth.resolve_role_from_azure_rbac(
+                tenant_conn, tenant_id, identity.oid, identity.email
+            )
+        except PermissionError as exc:
+            return _oauth_redirect_with_error(str(exc))
+        except LookupError as exc:
+            return _oauth_redirect_with_error(f"Azure RBAC lookup failed: {exc}")
+    finally:
+        tenant_conn.close()
+
+    user = azure_oauth.upsert_oauth_user(db, identity, vce_role)
+    token = create_access_token(data={
+        "sub": user["username"],
+        "role": user["role"],
+        "auth": "azure",
+        "matched_roles": matched,
+    })
+
+    return _oauth_success_redirect(token, user["role"])
+
+
+# ─── AWS IAM Identity Center OIDC (PRD §7.2.3) ────────────────────────
+
+@router.get("/aws/config")
+async def aws_auth_config():
+    """UI polls this to decide whether to render the 'Sign in with AWS' button."""
+    return {
+        "enabled": settings.aws_auth_enabled,
+        "allowed_domains": settings.aws_allowed_domains_list(),
+    }
+
+
+@router.get("/aws/login")
+async def aws_login(tenant_id: str):
+    if not settings.aws_auth_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="AWS auth disabled")
+    if not (
+        settings.aws_oauth_client_id
+        and settings.aws_oauth_client_secret
+        and settings.aws_oidc_issuer
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AWS OIDC is not configured (missing issuer / client id / secret).",
+        )
+    try:
+        url, _state = await aws_oauth.build_authorize_url(tenant_id=tenant_id)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"AWS OIDC discovery failed: {exc}",
+        )
+    return RedirectResponse(url=url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+
+@router.get("/aws/callback")
+async def aws_callback(
+    request: Request,
+    db: Annotated[sqlite3.Connection, Depends(get_auth_db)],
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+):
+    if not settings.aws_auth_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="AWS auth disabled")
+    if error:
+        return _oauth_redirect_with_error(f"AWS returned error: {error_description or error}")
+    if not code or not state:
+        return _oauth_redirect_with_error("Missing OAuth code or state.")
+
+    try:
+        state_payload = aws_oauth.verify_state(state)
+    except ValueError as exc:
+        return _oauth_redirect_with_error(str(exc))
+
+    tenant_id = state_payload.get("tid")
+    if not tenant_id:
+        return _oauth_redirect_with_error("State payload missing tenant id.")
+
+    try:
+        identity = await aws_oauth.exchange_code_and_verify(code)
+    except PermissionError as exc:
+        return _oauth_redirect_with_error(str(exc))
+    except Exception as exc:
+        return _oauth_redirect_with_error(f"AWS token exchange failed: {exc}")
+
+    tenant_conn = create_connection(settings.tenant_db_path(tenant_id))
+    try:
+        try:
+            vce_role, matched = await aws_oauth.resolve_role_from_aws_iam(
+                tenant_conn, tenant_id, identity.email
+            )
+        except PermissionError as exc:
+            return _oauth_redirect_with_error(str(exc))
+        except LookupError as exc:
+            return _oauth_redirect_with_error(f"AWS IAM lookup failed: {exc}")
+    finally:
+        tenant_conn.close()
+
+    user = aws_oauth.upsert_oauth_user(db, identity, vce_role)
+    token = create_access_token(data={
+        "sub": user["username"],
+        "role": user["role"],
+        "auth": "aws",
+        "matched_roles": matched,
+    })
+
+    return _oauth_success_redirect(token, user["role"])

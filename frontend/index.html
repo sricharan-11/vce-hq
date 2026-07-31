@@ -30,21 +30,29 @@
                 <button type="submit" class="btn-primary">Sign In</button>
             </form>
 
-            <div id="gcpAuthSection" style="display:none; margin-top: 1.25rem;">
+            <div id="cloudAuthSection" style="display:none; margin-top: 1.25rem;">
                 <div style="display:flex; align-items:center; gap:8px; margin: 0.75rem 0; color: var(--text-muted); font-size: 0.8rem;">
                     <hr style="flex:1; border:0; border-top:1px solid var(--border);"/>
                     <span>OR</span>
                     <hr style="flex:1; border:0; border-top:1px solid var(--border);"/>
                 </div>
                 <div class="form-group">
-                    <label for="gcpTenantId">Tenant ID</label>
-                    <input type="text" id="gcpTenantId" value="tenant-123" placeholder="Tenant to sign in for">
+                    <label for="cloudTenantId">Tenant ID</label>
+                    <input type="text" id="cloudTenantId" value="tenant-123" placeholder="Tenant to sign in for">
                 </div>
-                <button type="button" id="gcpLoginBtn" class="btn-secondary" style="width:100%; display:flex; align-items:center; justify-content:center; gap:8px;">
+
+                <button type="button" id="gcpLoginBtn" data-provider="gcp" class="btn-secondary provider-btn" style="display:none; width:100%; align-items:center; justify-content:center; gap:8px; margin-bottom: 8px;">
                     <i class="fa-brands fa-google"></i> Sign in with Google
                 </button>
+                <button type="button" id="azureLoginBtn" data-provider="azure" class="btn-secondary provider-btn" style="display:none; width:100%; align-items:center; justify-content:center; gap:8px; margin-bottom: 8px;">
+                    <i class="fa-brands fa-microsoft"></i> Sign in with Microsoft
+                </button>
+                <button type="button" id="awsLoginBtn" data-provider="aws" class="btn-secondary provider-btn" style="display:none; width:100%; align-items:center; justify-content:center; gap:8px; margin-bottom: 8px;">
+                    <i class="fa-brands fa-aws"></i> Sign in with AWS
+                </button>
+
                 <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 8px; text-align:center;">
-                    Your VCE role is derived from your GCP IAM bindings.
+                    Your VCE role is derived from your cloud IAM/RBAC bindings.
                 </p>
             </div>
         </div>
@@ -328,6 +336,7 @@
     </div>
     
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
     <script src="app.js?v=2.8"></script>
 </body>
 </html>

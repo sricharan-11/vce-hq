@@ -12,6 +12,7 @@ from enum import StrEnum
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
+from vce_hq.auth.security import issue_gate_ticket
 from vce_hq.config import settings
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,11 @@ class GateDecision(StrEnum):
 class SecurityGateResult:
     decision: GateDecision
     reason: str
+    # Short-lived signed JWT bound to sha256(command). The executor MUST
+    # verify this before spawning a subprocess for ELEVATED/CRITICAL
+    # commands so a compromised call site can't swap in a different
+    # command after the gate approves.
+    ticket: str | None = None
 
 # Use the same model setup as the rest of the app
 genai.configure(api_key=settings.google_api_key)
@@ -62,6 +68,9 @@ async def review_command(
     original_query: str,
     reasoning: str,
     adrs_context: str = "",
+    *,
+    agent: str = "unknown",
+    tenant_id: str = "unknown",
 ) -> SecurityGateResult:
     """Evaluate an ELEVATED/CRITICAL command using the LLM."""
     prompt = f"""
@@ -96,14 +105,24 @@ Tenant ADR Context:
         )
         data = json.loads(response.text)
         decision = GateDecision(data.get("decision", "rejected").lower())
+        ticket: str | None = None
+        if decision == GateDecision.APPROVED:
+            ticket = issue_gate_ticket(
+                command=command,
+                agent=agent,
+                tenant_id=tenant_id,
+                decision="approved",
+            )
         return SecurityGateResult(
             decision=decision,
-            reason=data.get("reason", "No reason provided")
+            reason=data.get("reason", "No reason provided"),
+            ticket=ticket,
         )
     except Exception as e:
         logger.error("Security gate LLM call failed: %s", e)
         # Fail safe
         return SecurityGateResult(
             decision=GateDecision.REJECTED,
-            reason=f"Security gate internal error: {e}"
+            reason=f"Security gate internal error: {e}",
+            ticket=None,
         )

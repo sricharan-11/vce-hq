@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from vce_hq.api.middleware import RequestLoggingMiddleware
+from vce_hq.api.middleware import RequestLoggingMiddleware, SecurityHeadersMiddleware
 from vce_hq.api.routes import analyze, credentials, health, knowledge, webhooks, finops, trace
 from vce_hq.api.scheduler import start_scheduler
 from vce_hq.config import settings
@@ -49,6 +49,9 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # OWASP-recommended security headers (CSP, XFO, HSTS, …).
+    app.add_middleware(SecurityHeadersMiddleware)
 
     # Request logging
     app.add_middleware(RequestLoggingMiddleware)

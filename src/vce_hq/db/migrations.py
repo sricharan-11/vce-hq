@@ -86,14 +86,18 @@ def _retroactive_migrations(conn: sqlite3.Connection) -> None:
     add_col("users", "email", "TEXT")
     add_col("users", "google_sub", "TEXT")
     add_col("users", "last_role_sync_at", "TEXT")
-    # Best-effort uniqueness on google_sub (ignore if index exists).
-    try:
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub "
-            "ON users(google_sub) WHERE google_sub IS NOT NULL"
-        )
-    except sqlite3.OperationalError:
-        pass
+    # Multi-cloud OIDC subjects (Microsoft Entra + AWS IAM Identity Center) — PRD §7.5
+    add_col("users", "azure_oid", "TEXT")
+    add_col("users", "aws_sub", "TEXT")
+    # Best-effort uniqueness on provider subject columns.
+    for col in ("google_sub", "azure_oid", "aws_sub"):
+        try:
+            conn.execute(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS idx_users_{col} "
+                f"ON users({col}) WHERE {col} IS NOT NULL"
+            )
+        except sqlite3.OperationalError:
+            pass
 
 
 def _create_stm_tables(conn: sqlite3.Connection) -> None:

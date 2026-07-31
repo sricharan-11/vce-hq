@@ -9,12 +9,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function authFetch(url, options = {}) {
-        const token = getAuthToken();
         const headers = {
-            ...options.headers,
-            'Authorization': token ? `Bearer ${token}` : ''
+            ...options.headers
         };
-        const response = await fetch(url, { ...options, headers });
+        // Ensure credentials are sent with the fetch request so the HttpOnly cookie is included
+        const response = await fetch(url, { ...options, headers, credentials: 'same-origin' });
         if (response.status === 401) {
             handleLogout(); // Auto-logout if token is invalid/expired
         }
@@ -29,12 +28,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function checkAuth() {
-        const token = getAuthToken();
-        if (token) {
-            const payload = parseJwt(token);
-            if (payload && payload.exp * 1000 > Date.now()) {
-                currentUser = payload.sub;
+    async function checkAuth() {
+        try {
+            const resp = await authFetch('/auth/me');
+            if (resp.ok) {
+                const payload = await resp.json();
+                currentUser = payload.username;
                 isAdmin = payload.role === 'admin';
                 document.getElementById('loginView').style.display = 'none';
                 document.querySelector('.app-container').style.display = 'flex';
@@ -47,39 +46,54 @@ document.addEventListener('DOMContentLoaded', () => {
                 restoreSession();
                 return;
             }
+        } catch (e) {
+            console.error("Auth check failed", e);
         }
         // Not authenticated
         document.getElementById('loginView').style.display = 'flex';
         document.querySelector('.app-container').style.display = 'none';
-        initGcpAuthUI();
+        initCloudAuthUI();
     }
 
-    async function initGcpAuthUI() {
-        try {
-            const resp = await fetch('/auth/gcp/config');
-            if (!resp.ok) return;
-            const cfg = await resp.json();
-            const section = document.getElementById('gcpAuthSection');
-            if (!section) return;
-            section.style.display = cfg.enabled ? 'block' : 'none';
-        } catch (e) { /* endpoint may 404 — ignore */ }
+    async function initCloudAuthUI() {
+        const providers = [
+            { key: 'gcp',   endpoint: '/auth/gcp/config',   btnId: 'gcpLoginBtn'   },
+            { key: 'azure', endpoint: '/auth/azure/config', btnId: 'azureLoginBtn' },
+            { key: 'aws',   endpoint: '/auth/aws/config',   btnId: 'awsLoginBtn'   },
+        ];
+        let anyEnabled = false;
+        await Promise.all(providers.map(async (p) => {
+            try {
+                const resp = await fetch(p.endpoint);
+                if (!resp.ok) return;
+                const cfg = await resp.json();
+                if (cfg.enabled) {
+                    const btn = document.getElementById(p.btnId);
+                    if (btn) btn.style.display = 'flex';
+                    anyEnabled = true;
+                }
+            } catch (e) { /* endpoint may 404 — ignore */ }
+        }));
+        const section = document.getElementById('cloudAuthSection');
+        if (section) section.style.display = anyEnabled ? 'block' : 'none';
     }
 
     document.addEventListener('click', (e) => {
-        if (e.target && e.target.id === 'gcpLoginBtn') {
-            const tenantId = (document.getElementById('gcpTenantId').value || '').trim();
-            if (!tenantId) {
-                document.getElementById('loginError').innerText = 'Enter a tenant ID before Google sign-in.';
-                return;
-            }
-            window.location.href = '/auth/gcp/login?tenant_id=' + encodeURIComponent(tenantId);
+        const btn = e.target && e.target.closest && e.target.closest('.provider-btn');
+        if (!btn) return;
+        const provider = btn.dataset.provider;
+        if (!provider) return;
+        const tenantId = (document.getElementById('cloudTenantId').value || '').trim();
+        if (!tenantId) {
+            document.getElementById('loginError').innerText = 'Enter a tenant ID before cloud sign-in.';
+            return;
         }
+        window.location.href = `/auth/${provider}/login?tenant_id=` + encodeURIComponent(tenantId);
     });
 
-    // OAuth callback lands us at /ui/#token=...&role=... or /ui/#oauth_error=...
+    // OAuth callback lands us at /ui/?oauth_error=... if it failed. Success sets a cookie and redirects to /ui/
     (function handleOAuthCallbackFragment() {
-        if (!window.location.hash) return;
-        const params = new URLSearchParams(window.location.hash.slice(1));
+        const params = new URLSearchParams(window.location.search);
         const errorMsg = params.get('oauth_error');
         if (errorMsg) {
             const el = document.getElementById('loginError');
@@ -87,12 +101,8 @@ document.addEventListener('DOMContentLoaded', () => {
             history.replaceState(null, '', window.location.pathname);
             return;
         }
-        const token = params.get('token');
-        if (token) {
-            localStorage.setItem('vce_token', token);
-            history.replaceState(null, '', window.location.pathname);
-            checkAuth();
-        }
+        // Always check auth on load to see if a cookie is present
+        checkAuth();
     })();
 
     // --- Login Handling ---
@@ -114,8 +124,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             
             if (response.ok) {
-                const data = await response.json();
-                localStorage.setItem('vce_token', data.access_token);
+                // The server sets the HttpOnly cookie upon successful login
                 errorDiv.innerText = '';
                 checkAuth();
             } else {
@@ -126,8 +135,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    function handleLogout() {
-        localStorage.removeItem('vce_token');
+    async function handleLogout() {
+        try {
+            await fetch('/auth/logout', { method: 'POST' });
+        } catch (e) {
+            console.error("Logout request failed", e);
+        }
         localStorage.removeItem('vce_session_id');
         currentSessionId = null;
         document.getElementById('loginView').style.display = 'flex';
@@ -244,11 +257,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             <div style="padding: 15px; border-bottom: 1px solid #333; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='#27272f'" onmouseout="this.style.background='transparent'">
                                 <div style="display: flex; align-items: center; margin-bottom: 8px;">
                                     <i class="fa-solid ${icon}" style="color: ${color}; margin-right: 10px; font-size: 1.2rem;"></i>
-                                    <strong style="color: white; font-size: 0.95rem;">${title}</strong>
+                                    <strong style="color: white; font-size: 0.95rem;">${DOMPurify.sanitize(title)}</strong>
                                     <span style="margin-left: auto; font-size: 0.75rem; color: #666;">${new Date(report.created_at).toLocaleString()}</span>
                                 </div>
                                 <div style="color: #a1a1aa; font-size: 0.85rem; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis;">
-                                    ${marked.parse(report.summary).replace(/<[^>]*>?/gm, '')}
+                                    ${DOMPurify.sanitize(marked.parse(report.summary))}
                                 </div>
                             </div>
                         `;
@@ -398,11 +411,13 @@ document.addEventListener('DOMContentLoaded', () => {
         div.className = `message ${type}`;
         if(id) div.id = id;
         
-        if(type === 'user' || type === 'loading') {
-            div.innerHTML = content;
+        if (type === 'user') {
+            div.textContent = content; // Safe text rendering
+        } else if (type === 'loading') {
+            div.innerHTML = content; // Trusted HTML string
         } else {
-            // Content is already parsed HTML for agent
-            div.innerHTML = content;
+            // Content is parsed HTML for agent, sanitize it!
+            div.innerHTML = DOMPurify.sanitize(content);
         }
 
         chatHistory.appendChild(div);
@@ -452,15 +467,15 @@ document.addEventListener('DOMContentLoaded', () => {
             
             li.innerHTML = `
                 <div class="cred-info">
-                    <strong>${cred.name}</strong>
-                    <span>${cred.provider.toUpperCase()} &bull; Added ${new Date(cred.created_at).toLocaleDateString()}</span>
+                    <strong>${DOMPurify.sanitize(cred.name)}</strong>
+                    <span>${DOMPurify.sanitize(cred.provider).toUpperCase()} &bull; Added ${new Date(cred.created_at).toLocaleDateString()}</span>
                     <div style="margin-top:6px">${statusBadge}</div>
                 </div>
                 <div class="cred-actions">
-                    <button onclick="refreshInventory('${cred.name}')" title="Re-capture Inventory" style="background:rgba(59,130,246,0.1);color:var(--accent);margin-right:6px">
+                    <button onclick="refreshInventory('${CSS.escape(cred.name)}')" title="Re-capture Inventory" style="background:rgba(59,130,246,0.1);color:var(--accent);margin-right:6px">
                         <i class="fa-solid fa-rotate-right"></i>
                     </button>
-                    <button onclick="deleteCredential('${cred.name}')" title="Delete Credential">
+                    <button onclick="deleteCredential('${CSS.escape(cred.name)}')" title="Delete Credential">
                         <i class="fa-solid fa-trash"></i>
                     </button>
                 </div>
@@ -643,12 +658,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     const date = new Date(doc.created_at);
                     
                     tr.innerHTML = `
-                        <td style="font-family: monospace;">${doc.document_name}</td>
-                        <td><span class="status-badge" style="background: rgba(139, 92, 246, 0.2); color: #c4b5fd;">${doc.category}</span></td>
+                        <td style="font-family: monospace;">${DOMPurify.sanitize(doc.document_name)}</td>
+                        <td><span class="status-badge" style="background: rgba(139, 92, 246, 0.2); color: #c4b5fd;">${DOMPurify.sanitize(doc.category)}</span></td>
                         <td>${doc.chunks}</td>
                         <td>${date.toLocaleString()}</td>
                         <td>
-                            <button class="btn-danger btn-small" onclick="deleteKnowledge('${doc.document_name}')" title="Delete">
+                            <button class="btn-danger btn-small" onclick="deleteKnowledge('${CSS.escape(doc.document_name)}')" title="Delete">
                                 <i class="fa-solid fa-trash"></i>
                             </button>
                         </td>

@@ -321,52 +321,95 @@ VCE-HQ supports **two coexisting authentication paths**. Both are always availab
 - Passwords stored as bcrypt hashes. JWT (HS256) issued on success, TTL `VCE_JWT_EXPIRATION_MINUTES` (default 24h).
 - Purpose: bootstrap the tenant, configure The Vault, and recover access if GCP auth is unavailable.
 
-### 7.2 GCP OAuth 2.0 (OIDC) with IAM-Derived Roles — Primary Path
-The recommended production auth mode. The user's **identity comes from Google**, and their **role comes from the tenant's GCP IAM policy** — VCE-HQ never manages a separate role assignment for OAuth users.
+### 7.2 Cloud OIDC + IAM-Derived Roles — Primary Path
 
-**Flow**
+The recommended production auth mode. VCE-HQ supports **three symmetric OIDC providers** — Google, Microsoft Entra ID, and AWS IAM Identity Center. In every case:
 
-1. User clicks *Sign in with Google* on the login view.
-2. VCE-HQ redirects to Google's OAuth 2.0 consent endpoint (scopes: `openid`, `email`, `profile`).
-3. Google returns an authorization code to `GET /auth/gcp/callback`.
-4. VCE-HQ exchanges the code for `id_token` + `access_token`, verifies the ID token signature and audience against `VCE_GCP_OAUTH_CLIENT_ID`, and extracts `email` + `sub` (google_sub).
-5. If `VCE_GCP_ALLOWED_DOMAINS` is set, the `hd` claim (Google Workspace hosted domain) must match; otherwise reject.
-6. VCE-HQ resolves the tenant's GCP service account from **The Vault** and calls `projects.getIamPolicy` on `VCE_GCP_PROJECT_ID` (per-tenant project; single-project scope in M1, multi-project in v2).
-7. Bindings are filtered for `user:<email>` (and, transitively, `group:<g>` when the user is a member). The union of matching GCP roles is mapped to a VCE role via `VCE_GCP_ROLE_MAP_ADMIN` / `VCE_GCP_ROLE_MAP_USER`.
-8. A user with no matching binding is rejected — IAM is the source of truth. Removing a user in GCP removes their VCE access on next login (and on next background re-sync — see §7.4).
-9. VCE-HQ upserts the user row (`auth_method='gcp'`, `email`, `google_sub`, resolved `role`, `last_role_sync_at`) and issues the same VCE JWT used by the local path.
+1. Identity comes from the cloud provider's OIDC endpoint (`openid email profile`).
+2. Role is **derived at login** by calling that cloud's native IAM API using a **tenant service principal / credential already stored in The Vault** — no new credential surface.
+3. GCP/Azure/AWS-native roles are mapped to VCE `admin` / `user` via provider-specific `_ROLE_MAP_*` env vars.
+4. A user with no matching binding is rejected — IAM is the source of truth.
+5. On success, VCE-HQ upserts the users row (`auth_method ∈ {gcp,azure,aws}`, `email`, `provider_sub`, `role`, `last_role_sync_at`) and issues the same VCE JWT used by local auth.
 
-**Configuration** (all `VCE_GCP_*` keys live in `.env`)
+All three providers use **OIDC exclusively** (no SAML). Microsoft's Identity Platform v2 documentation itself recommends OIDC over SAML for new applications, and Python SAML implementations require `xmlsec` — a heavy native dependency with a poor CVE history that is inappropriate for a self-hostable slim container.
+
+#### 7.2.1 GCP (Google OIDC + `projects.getIamPolicy`)
+
+* **Authorize:** `https://accounts.google.com/o/oauth2/v2/auth`
+* **Token:** `https://oauth2.googleapis.com/token`
+* **Role source:** `cloudresourcemanager.projects.getIamPolicy` on `VCE_GCP_PROJECT_ID`. Bindings are filtered for `user:<email>`; the union of matching GCP roles is mapped to VCE role.
+* **Vault credential** (`VCE_GCP_IAM_CREDENTIAL_NAME`, default `gcp-iam-lookup`): SA JSON with `roles/iam.securityReviewer` (or any role granting `resourcemanager.projects.getIamPolicy`) on the project.
+* **Domain restriction:** optional `hd` claim gating via `VCE_GCP_ALLOWED_DOMAINS`.
 
 | Key | Purpose |
 |---|---|
-| `VCE_GCP_AUTH_ENABLED` | Master toggle; when `false` the OAuth endpoints return 404 and the UI hides the button. |
-| `VCE_GCP_OAUTH_CLIENT_ID` / `VCE_GCP_OAUTH_CLIENT_SECRET` | OAuth 2.0 web-application client credentials issued in Google Cloud Console. |
+| `VCE_GCP_AUTH_ENABLED` | Master toggle. |
+| `VCE_GCP_OAUTH_CLIENT_ID` / `VCE_GCP_OAUTH_CLIENT_SECRET` | OAuth 2.0 web-application credentials. |
 | `VCE_GCP_OAUTH_REDIRECT_URI` | Public callback URL, e.g. `https://vce.example.com/auth/gcp/callback`. |
-| `VCE_GCP_PROJECT_ID` | GCP project whose IAM policy is authoritative for role resolution (M1). |
-| `VCE_GCP_ALLOWED_DOMAINS` | Comma-separated Workspace domains permitted to sign in (empty = any Google account). |
-| `VCE_GCP_ROLE_MAP_ADMIN` | GCP roles mapped to VCE `admin` (default: `roles/owner,roles/resourcemanager.projectIamAdmin,roles/vce.admin`). |
-| `VCE_GCP_ROLE_MAP_USER` | GCP roles mapped to VCE `user` (default: `roles/editor,roles/viewer,roles/vce.user`). |
-| `VCE_GCP_ROLE_SYNC_TTL_MINUTES` | How often protected requests re-check IAM in the background (default: 15). |
+| `VCE_GCP_PROJECT_ID` | Project whose IAM policy is authoritative (M1). |
+| `VCE_GCP_IAM_CREDENTIAL_NAME` | Vault credential holding the SA JSON for the IAM lookup. |
+| `VCE_GCP_ALLOWED_DOMAINS` | Comma-separated Workspace domains permitted to sign in. |
+| `VCE_GCP_ROLE_MAP_ADMIN` / `VCE_GCP_ROLE_MAP_USER` | GCP roles mapped to VCE `admin` / `user`. |
+| `VCE_GCP_ROLE_SYNC_TTL_MINUTES` | Background IAM re-check cadence (default: 15). |
 
-**Security properties**
-- No new credential surface: the IAM lookup reuses the tenant SA already scoped and stored in The Vault.
-- OAuth `state` parameter is signed with `VCE_JWT_SECRET_KEY` to prevent CSRF/replay on the callback.
-- `client_secret` never touches the browser; it lives only in the container's env.
+#### 7.2.2 Microsoft Entra ID (OIDC + Azure RBAC)
+
+* **Authorize:** `https://login.microsoftonline.com/{VCE_AZURE_TENANT_ID}/oauth2/v2.0/authorize`
+* **Token:** `https://login.microsoftonline.com/{VCE_AZURE_TENANT_ID}/oauth2/v2.0/token`
+* **ID token verification:** JWKS at `https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys`. Verify `iss` matches `https://login.microsoftonline.com/{tenant}/v2.0` and `aud` matches the client id.
+* **Role source:** Azure Resource Manager REST API on `VCE_AZURE_SUBSCRIPTION_ID`. VCE-HQ calls `GET /subscriptions/{sub}/providers/Microsoft.Authorization/roleAssignments?$filter=assignedTo('{oid}')&api-version=2022-04-01`, then dereferences each `roleDefinitionId` to a human-readable role name (e.g., `Owner`, `Contributor`, `Reader`). The user's `oid` claim comes straight from the ID token — no Graph API call is required.
+* **Vault credential** (`VCE_AZURE_IAM_CREDENTIAL_NAME`, default `azure-iam-lookup`): JSON `{"tenant_id", "client_id", "client_secret"}` for a service principal with `Reader` on the subscription. The SP obtains a token from `login.microsoftonline.com` using the client-credentials grant for scope `https://management.azure.com/.default`.
+* **Domain restriction:** optional `preferred_username` domain gating via `VCE_AZURE_ALLOWED_DOMAINS`.
+
+| Key | Purpose |
+|---|---|
+| `VCE_AZURE_AUTH_ENABLED` | Master toggle. |
+| `VCE_AZURE_TENANT_ID` | Entra tenant GUID hosting the app registration. |
+| `VCE_AZURE_OAUTH_CLIENT_ID` / `VCE_AZURE_OAUTH_CLIENT_SECRET` | App registration credentials. |
+| `VCE_AZURE_OAUTH_REDIRECT_URI` | Public callback URL, e.g. `https://vce.example.com/auth/azure/callback`. |
+| `VCE_AZURE_SUBSCRIPTION_ID` | Subscription whose RBAC is authoritative (M1). |
+| `VCE_AZURE_IAM_CREDENTIAL_NAME` | Vault credential holding the SP JSON for RBAC lookup. |
+| `VCE_AZURE_ALLOWED_DOMAINS` | Comma-separated UPN domains permitted to sign in. |
+| `VCE_AZURE_ROLE_MAP_ADMIN` / `VCE_AZURE_ROLE_MAP_USER` | Azure role names mapped to VCE `admin` / `user`. Defaults: `Owner,User Access Administrator,VCE Admin` / `Contributor,Reader,VCE User`. |
+| `VCE_AZURE_ROLE_SYNC_TTL_MINUTES` | Background RBAC re-check cadence (default: 15). |
+
+#### 7.2.3 AWS IAM Identity Center (OIDC + IAM policies)
+
+* **Authorize / Token / JWKS:** discovered from `VCE_AWS_OIDC_ISSUER/.well-known/openid-configuration` (e.g., `https://identitycenter.amazonaws.com/ssoins-XXXXXXXXXXXXXXX`).
+* **Role source:** AWS IAM policies attached to the IAM user whose **username or `Email` tag** matches the OIDC `email` claim. VCE-HQ calls `iam.list_users`, resolves the matching user, then `iam.list_attached_user_policies` + `iam.list_user_policies` and extracts policy names. Group-based policies are additionally collected via `iam.list_groups_for_user`.
+* **Vault credential** (`VCE_AWS_IAM_CREDENTIAL_NAME`, default `aws-iam-lookup`): JSON `{"aws_access_key_id", "aws_secret_access_key", "region"}` for an IAM principal with `iam:ListUsers`, `iam:ListAttachedUserPolicies`, `iam:ListUserPolicies`, and `iam:ListGroupsForUser`. `AWSSecurityAudit` is a convenient managed policy that covers all four.
+* **Convention:** AWS IAM users are matched to OIDC emails using two rules in order: (1) `UserName == email`, (2) any tag key `Email` (case-insensitive) whose value equals the email.
+
+| Key | Purpose |
+|---|---|
+| `VCE_AWS_AUTH_ENABLED` | Master toggle. |
+| `VCE_AWS_OIDC_ISSUER` | IAM Identity Center OIDC issuer URL (from the Identity Center console). |
+| `VCE_AWS_OAUTH_CLIENT_ID` / `VCE_AWS_OAUTH_CLIENT_SECRET` | Registered OIDC application credentials. |
+| `VCE_AWS_OAUTH_REDIRECT_URI` | Public callback URL, e.g. `https://vce.example.com/auth/aws/callback`. |
+| `VCE_AWS_IAM_CREDENTIAL_NAME` | Vault credential holding the AWS access-key JSON for the policy lookup. |
+| `VCE_AWS_ALLOWED_DOMAINS` | Comma-separated email domains permitted to sign in. |
+| `VCE_AWS_ROLE_MAP_ADMIN` / `VCE_AWS_ROLE_MAP_USER` | AWS IAM policy names mapped to VCE `admin` / `user`. Defaults: `AdministratorAccess,VCEAdmin` / `ReadOnlyAccess,ViewOnlyAccess,VCEUser`. |
+| `VCE_AWS_ROLE_SYNC_TTL_MINUTES` | Background IAM re-check cadence (default: 15). |
+
+**Security properties (all providers)**
+- No new credential surface: every IAM lookup reuses a tenant service principal already scoped and stored in The Vault.
+- OAuth `state` parameter is signed with `VCE_JWT_SECRET_KEY` to prevent CSRF/replay on the callback — same code path for all three providers.
+- Client secrets never touch the browser; they live only in the container's env.
+- ID tokens are verified against the provider's published JWKS (not a static shared secret).
 - Failed IAM lookups fail closed — the user is rejected, never silently promoted.
 
 ### 7.3 User Management
 - The local `admin` continues to own a **User Management Section** in the UI for provisioning/rotating local users (break-glass and service accounts).
-- OAuth users are **implicitly provisioned** on first successful login — no manual creation step. Their VCE role is a projection of GCP IAM and cannot be edited from the UI; changes must be made in GCP.
-- Any local user can be disabled by the `admin`; any OAuth user can be disabled by removing their IAM binding in GCP.
+- OIDC users (GCP / Azure / AWS) are **implicitly provisioned** on first successful login — no manual creation step. Their VCE role is a projection of the cloud IAM / RBAC and cannot be edited from the UI; changes must be made in the source cloud.
+- Any local user can be disabled by the `admin`; any OIDC user can be disabled by removing their IAM/RBAC binding in the source cloud.
 
 ### 7.4 Role Freshness & Re-Sync
-- On every protected request, if `now - last_role_sync_at > VCE_GCP_ROLE_SYNC_TTL_MINUTES`, VCE-HQ re-runs the IAM lookup asynchronously and updates the row. The current request uses the JWT's role; the next request sees the refreshed value.
-- On IAM lookup failure (network, quota, revoked SA), the previous role is retained until the SA is fixed — logged as `WARN` and surfaced on the admin dashboard so operators notice a broken SA quickly.
+- On every protected request, if `now - last_role_sync_at > VCE_<PROVIDER>_ROLE_SYNC_TTL_MINUTES`, VCE-HQ re-runs the IAM/RBAC lookup asynchronously and updates the row. The current request uses the JWT's role; the next request sees the refreshed value.
+- On IAM lookup failure (network, quota, revoked SA/SP), the previous role is retained until the credential is fixed — logged as `WARN` and surfaced on the admin dashboard so operators notice a broken cloud credential quickly.
 
 ### 7.5 Data Store
-- All identities, hashed passwords (local), Google `sub` mappings (OAuth), session/JWT metadata, and the `last_role_sync_at` timestamp live in the existing **per-tenant SQLite database**. No external identity store (Postgres, Redis, Firebase, Auth0) is introduced.
-- Migration adds columns to `users`: `auth_method TEXT NOT NULL DEFAULT 'password'`, `email TEXT`, `google_sub TEXT UNIQUE`, `last_role_sync_at TEXT`. Existing rows are unaffected.
+- All identities, hashed passwords (local), provider `sub` mappings (OIDC), session/JWT metadata, and the `last_role_sync_at` timestamp live in the existing **per-tenant SQLite database**. No external identity store (Postgres, Redis, Firebase, Auth0) is introduced.
+- Migration adds columns to `users`: `auth_method TEXT NOT NULL DEFAULT 'password'` (one of `password`, `gcp`, `azure`, `aws`), `email TEXT`, and per-provider subject columns `google_sub TEXT`, `azure_oid TEXT`, `aws_sub TEXT`, plus `last_role_sync_at TEXT`. Each subject column carries a partial unique index. Existing rows are unaffected.
 
 ---
 
@@ -443,6 +486,7 @@ All incoming webhooks are normalized into this schema before being handed to the
 
 > - **Authentication Module (v1):** Adopted a standalone Auth module utilizing the local SQLite DB. Features an initial default admin + static password setup, with password rotation and user provisioning handled within a built-in User Management UI. This remains as the **break-glass** path so the system stays recoverable when SSO is misconfigured or GCP is unreachable.
 > - **GCP OAuth + IAM-Derived Roles (v1.1 — reversal of prior no-OAuth stance):** Added Google OAuth 2.0 (OIDC) as the primary authentication path. Role assignment is derived at login time from the tenant's GCP IAM policy via `projects.getIamPolicy`, using the tenant service account already stored in **The Vault** — no new credential surface. GCP roles are mapped to VCE roles via `VCE_GCP_ROLE_MAP_ADMIN` / `VCE_GCP_ROLE_MAP_USER`. Rationale for reversing the earlier decision: (a) the agents already consume GCP credentials, so requiring GCP identity for humans aligns operator and agent trust boundaries; (b) IAM as the source of truth means offboarding a user in GCP immediately removes their VCE access on next login/re-sync, closing a common lifecycle gap; (c) it avoids VCE-HQ becoming a parallel identity store to maintain.
+> - **Multi-Cloud OIDC (v1.2 — Microsoft Entra ID + AWS IAM Identity Center):** Extended the cloud-OIDC pattern from a GCP-only feature to a **provider-agnostic contract** covering all three clouds the platform already operates on. Microsoft roles are derived from **Azure RBAC** on `VCE_AZURE_SUBSCRIPTION_ID` (parallel to GCP `getIamPolicy`); AWS roles are derived from **IAM policies attached to the IAM user** whose username or `Email` tag matches the OIDC email claim. **All three integrations use OIDC exclusively** — SAML was explicitly rejected because (a) Microsoft's own current guidance prefers OIDC for new apps, (b) Python SAML requires the `xmlsec` native library with a poor CVE history and heavy container footprint, and (c) using one protocol for all three providers keeps ~80% of the code path shared (`state` signing, JWKS verification, upsert). The three IAM-lookup service principals live in The Vault under `gcp-iam-lookup`, `azure-iam-lookup`, `aws-iam-lookup` — rotation and revocation follow the same lifecycle as any other tenant credential.
 
 ---
 

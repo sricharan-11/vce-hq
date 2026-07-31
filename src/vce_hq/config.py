@@ -107,6 +107,33 @@ class Settings(BaseSettings):
     jwt_expiration_minutes: int = 1440  # 24 hours
     admin_password: str = "VCE-HQ#2026"  # PRD §7.1 default — override via VCE_ADMIN_PASSWORD
 
+    # HttpOnly session cookie (replaces localStorage token — XSS-resistant).
+    session_cookie_name: str = "vce_session"
+    # Disable Secure locally over http; enable in production (behind HTTPS/reverse proxy).
+    cookie_secure: bool = True
+    cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+
+    # Security headers middleware — tighten per environment.
+    security_headers_enabled: bool = True
+    # CSP is intentionally strict; adjust script-src/style-src if you self-host fonts/CDN.
+    content_security_policy: str = (
+        "default-src 'self'; "
+        "script-src 'self' https://cdnjs.cloudflare.com; "
+        "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
+    hsts_max_age_seconds: int = 31_536_000  # 1 year — only sent when request is HTTPS.
+    # Comma-separated allowed origins for CORS (empty = same-origin only).
+    cors_allowed_origins: str = ""
+
+    # Signed Security-Gate execution ticket (short-lived JWT bound to command hash).
+    gate_ticket_ttl_seconds: int = 60
+
     # GCP OAuth 2.0 / IAM-Derived Roles (PRD §7.2)
     gcp_auth_enabled: bool = False
     gcp_oauth_client_id: str = ""
@@ -120,6 +147,34 @@ class Settings(BaseSettings):
     gcp_role_map_admin: str = "roles/owner,roles/resourcemanager.projectIamAdmin,roles/vce.admin"
     gcp_role_map_user: str = "roles/editor,roles/viewer,roles/vce.user"
     gcp_role_sync_ttl_minutes: int = 15
+
+    # Microsoft Entra ID (Azure AD) OIDC / Azure RBAC-Derived Roles (PRD §7.2.2)
+    azure_auth_enabled: bool = False
+    azure_tenant_id: str = ""
+    azure_oauth_client_id: str = ""
+    azure_oauth_client_secret: str = ""
+    azure_oauth_redirect_uri: str = "http://localhost:8000/auth/azure/callback"
+    # Subscription whose RBAC is authoritative (M1: single subscription).
+    azure_subscription_id: str = ""
+    azure_iam_credential_name: str = "azure-iam-lookup"
+    # Comma-separated UPN domains (empty = any user in the tenant).
+    azure_allowed_domains: str = ""
+    azure_role_map_admin: str = "Owner,User Access Administrator,VCE Admin"
+    azure_role_map_user: str = "Contributor,Reader,VCE User"
+    azure_role_sync_ttl_minutes: int = 15
+
+    # AWS IAM Identity Center OIDC / IAM Policy-Derived Roles (PRD §7.2.3)
+    aws_auth_enabled: bool = False
+    aws_oidc_issuer: str = ""
+    aws_oauth_client_id: str = ""
+    aws_oauth_client_secret: str = ""
+    aws_oauth_redirect_uri: str = "http://localhost:8000/auth/aws/callback"
+    aws_iam_credential_name: str = "aws-iam-lookup"
+    # Comma-separated email domains (empty = any email accepted by the IdP).
+    aws_allowed_domains: str = ""
+    aws_role_map_admin: str = "AdministratorAccess,VCEAdmin"
+    aws_role_map_user: str = "ReadOnlyAccess,ViewOnlyAccess,VCEUser"
+    aws_role_sync_ttl_minutes: int = 15
 
     # Command execution (The Hands)
     cmd_max_iterations: int = 5
@@ -153,6 +208,37 @@ class Settings(BaseSettings):
             if role and role not in mapping:  # admin wins on overlap
                 mapping[role] = "user"
         return mapping
+
+    def azure_allowed_domains_list(self) -> list[str]:
+        return [d.strip().lower() for d in self.azure_allowed_domains.split(",") if d.strip()]
+
+    def azure_role_map(self) -> dict[str, str]:
+        """Return {azure_role_name: vce_role} for every configured mapping."""
+        mapping: dict[str, str] = {}
+        for role in (r.strip() for r in self.azure_role_map_admin.split(",")):
+            if role:
+                mapping[role] = "admin"
+        for role in (r.strip() for r in self.azure_role_map_user.split(",")):
+            if role and role not in mapping:
+                mapping[role] = "user"
+        return mapping
+
+    def aws_allowed_domains_list(self) -> list[str]:
+        return [d.strip().lower() for d in self.aws_allowed_domains.split(",") if d.strip()]
+
+    def aws_role_map(self) -> dict[str, str]:
+        """Return {aws_policy_name: vce_role} for every configured mapping."""
+        mapping: dict[str, str] = {}
+        for role in (r.strip() for r in self.aws_role_map_admin.split(",")):
+            if role:
+                mapping[role] = "admin"
+        for role in (r.strip() for r in self.aws_role_map_user.split(",")):
+            if role and role not in mapping:
+                mapping[role] = "user"
+        return mapping
+
+    def cors_allowed_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
 
 
 def get_settings() -> Settings:

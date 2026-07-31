@@ -7,6 +7,8 @@ import uuid
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from vce_hq.config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,5 +50,40 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             request_id, tenant_id, request.method, request.url.path,
             response.status_code, duration_ms,
         )
+
+        return response
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Set OWASP-recommended browser security headers on every response.
+
+    Includes:
+        - Content-Security-Policy         → blocks inline JS + arbitrary connect-src
+        - X-Content-Type-Options: nosniff → stops MIME sniffing on served assets
+        - X-Frame-Options: DENY           → belt-and-braces alongside CSP frame-ancestors
+        - Referrer-Policy: no-referrer    → avoids leaking `/analyze?…` paths to CDNs
+        - Strict-Transport-Security       → only when the request already came in via HTTPS
+    """
+
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        response = await call_next(request)
+        if not settings.security_headers_enabled:
+            return response
+
+        response.headers.setdefault("Content-Security-Policy", settings.content_security_policy)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+
+        # Only advertise HSTS when the browser is already talking to us over TLS —
+        # otherwise the header is ignored anyway and it hides local http dev issues.
+        if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
+            response.headers.setdefault(
+                "Strict-Transport-Security",
+                f"max-age={settings.hsts_max_age_seconds}; includeSubDomains",
+            )
 
         return response
