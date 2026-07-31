@@ -1,0 +1,50 @@
+# Secrets / local env — the container gets .env via env_file at runtime,
+# it must NEVER be baked into the image.
+.env
+.env.*
+!.env.example
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+venv/
+.venv/
+
+# Tenant data (must live on a docker volume, not in the image)
+data/
+
+# IDE / OS junk
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Runtime logs
+server.log
+*.log
+
+# Docs / planning — not needed in the runtime image
+PRD*.md
+arch.md
+git\&cd.md
+scratch/
+
+# VCS
+.git/
+.gitignore
+.github/
+.agents/
+
+# Local archives / diagrams
+*.gz
+*.tar.gz
+*.excalidraw
+image.png

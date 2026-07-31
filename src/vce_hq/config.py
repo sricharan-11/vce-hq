@@ -107,6 +107,20 @@ class Settings(BaseSettings):
     jwt_expiration_minutes: int = 1440  # 24 hours
     admin_password: str = "VCE-HQ#2026"  # PRD §7.1 default — override via VCE_ADMIN_PASSWORD
 
+    # GCP OAuth 2.0 / IAM-Derived Roles (PRD §7.2)
+    gcp_auth_enabled: bool = False
+    gcp_oauth_client_id: str = ""
+    gcp_oauth_client_secret: str = ""
+    gcp_oauth_redirect_uri: str = "http://localhost:8000/auth/gcp/callback"
+    # Tenant whose Vault-stored SA is used for IAM lookups (M1: single project).
+    gcp_project_id: str = ""
+    gcp_iam_credential_name: str = "gcp-iam-lookup"
+    # Comma-separated Workspace hosted domains (empty = any Google account).
+    gcp_allowed_domains: str = ""
+    gcp_role_map_admin: str = "roles/owner,roles/resourcemanager.projectIamAdmin,roles/vce.admin"
+    gcp_role_map_user: str = "roles/editor,roles/viewer,roles/vce.user"
+    gcp_role_sync_ttl_minutes: int = 15
+
     # Command execution (The Hands)
     cmd_max_iterations: int = 5
     cmd_max_per_session: int = 15
@@ -125,6 +139,20 @@ class Settings(BaseSettings):
         tenant_dir = self.data_dir / tenant_id
         tenant_dir.mkdir(parents=True, exist_ok=True)
         return tenant_dir / "vce.db"
+
+    def gcp_allowed_domains_list(self) -> list[str]:
+        return [d.strip().lower() for d in self.gcp_allowed_domains.split(",") if d.strip()]
+
+    def gcp_role_map(self) -> dict[str, str]:
+        """Return {gcp_role: vce_role} for every configured mapping."""
+        mapping: dict[str, str] = {}
+        for role in (r.strip() for r in self.gcp_role_map_admin.split(",")):
+            if role:
+                mapping[role] = "admin"
+        for role in (r.strip() for r in self.gcp_role_map_user.split(",")):
+            if role and role not in mapping:  # admin wins on overlap
+                mapping[role] = "user"
+        return mapping
 
 
 def get_settings() -> Settings:

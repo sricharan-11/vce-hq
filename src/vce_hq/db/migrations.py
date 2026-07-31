@@ -81,6 +81,19 @@ def _retroactive_migrations(conn: sqlite3.Connection) -> None:
     add_col("command_executions", "risk_signal", "TEXT DEFAULT 'none'")
     add_col("command_executions", "gate_invoked", "INTEGER DEFAULT 0")
     add_col("command_executions", "gate_decision", "TEXT DEFAULT ''")
+    # GCP OAuth users (PRD §7.5)
+    add_col("users", "auth_method", "TEXT NOT NULL DEFAULT 'password'")
+    add_col("users", "email", "TEXT")
+    add_col("users", "google_sub", "TEXT")
+    add_col("users", "last_role_sync_at", "TEXT")
+    # Best-effort uniqueness on google_sub (ignore if index exists).
+    try:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub "
+            "ON users(google_sub) WHERE google_sub IS NOT NULL"
+        )
+    except sqlite3.OperationalError:
+        pass
 
 
 def _create_stm_tables(conn: sqlite3.Connection) -> None:

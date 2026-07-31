@@ -51,7 +51,49 @@ document.addEventListener('DOMContentLoaded', () => {
         // Not authenticated
         document.getElementById('loginView').style.display = 'flex';
         document.querySelector('.app-container').style.display = 'none';
+        initGcpAuthUI();
     }
+
+    async function initGcpAuthUI() {
+        try {
+            const resp = await fetch('/auth/gcp/config');
+            if (!resp.ok) return;
+            const cfg = await resp.json();
+            const section = document.getElementById('gcpAuthSection');
+            if (!section) return;
+            section.style.display = cfg.enabled ? 'block' : 'none';
+        } catch (e) { /* endpoint may 404 — ignore */ }
+    }
+
+    document.addEventListener('click', (e) => {
+        if (e.target && e.target.id === 'gcpLoginBtn') {
+            const tenantId = (document.getElementById('gcpTenantId').value || '').trim();
+            if (!tenantId) {
+                document.getElementById('loginError').innerText = 'Enter a tenant ID before Google sign-in.';
+                return;
+            }
+            window.location.href = '/auth/gcp/login?tenant_id=' + encodeURIComponent(tenantId);
+        }
+    });
+
+    // OAuth callback lands us at /ui/#token=...&role=... or /ui/#oauth_error=...
+    (function handleOAuthCallbackFragment() {
+        if (!window.location.hash) return;
+        const params = new URLSearchParams(window.location.hash.slice(1));
+        const errorMsg = params.get('oauth_error');
+        if (errorMsg) {
+            const el = document.getElementById('loginError');
+            if (el) el.innerText = decodeURIComponent(errorMsg);
+            history.replaceState(null, '', window.location.pathname);
+            return;
+        }
+        const token = params.get('token');
+        if (token) {
+            localStorage.setItem('vce_token', token);
+            history.replaceState(null, '', window.location.pathname);
+            checkAuth();
+        }
+    })();
 
     // --- Login Handling ---
     document.getElementById('loginForm').addEventListener('submit', async (e) => {

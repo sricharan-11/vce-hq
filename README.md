@@ -8,48 +8,72 @@ VCE-HQ ingests observability signals (Datadog, CloudWatch, custom webhooks), rou
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
-### Using Docker (Recommended)
+### One-command fresh deployment (recommended)
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/sricharan-11/vce-hq.git
-   cd vce-hq
-   ```
-
-2. Configure the environment:
-   ```bash
-   cp .env.example .env
-   # Edit .env with your GOOGLE_API_KEY
-   ```
-
-3. Run the application:
-   ```bash
-   docker compose up -d
-   ```
-
-The API will be available at `http://localhost:80`. Interactive docs at `/docs`.
-
-### Bare Metal Installation
+Any Linux host with **Docker Engine + Compose v2** — nothing else required.
 
 ```bash
-# 1. Clone and install
 git clone https://github.com/sricharan-11/vce-hq.git && cd vce-hq
-python -m venv venv
-source venv/bin/activate
-pip install -e ".[dev]"
-
-# 2. Configure
-cp .env.example .env
-# Edit .env with your GOOGLE_API_KEY
-
-# 3. Run
-python -m vce_hq
-# or: uvicorn vce_hq.api.app:create_app --factory --host 0.0.0.0 --port 80
+./deploy.sh
 ```
 
-The API will be available at `http://localhost:80`. Interactive docs at `/docs`.
+`deploy.sh` will:
+- verify Docker is installed and the daemon is reachable,
+- seed `.env` from `.env.example` on first run,
+- auto-generate strong values for `VCE_CREDENTIAL_SECRET`, `VCE_JWT_SECRET_KEY`, and `VCE_ADMIN_PASSWORD`,
+- build the image, start the stack, and wait for `/health` to return 200.
+
+Add your provider API key (`GOOGLE_API_KEY`, `OPENAI_API_KEY`, …) to `.env` before the first run, or add it later and run `docker compose restart vce-hq`.
+
+Once healthy:
+
+| Surface | URL |
+|---|---|
+| UI      | http://localhost:8000/ui/ |
+| API docs| http://localhost:8000/docs |
+| Health  | http://localhost:8000/health |
+
+Default login: `admin` / the value of `VCE_ADMIN_PASSWORD` in `.env`.
+
+### Manual Docker Compose
+
+```bash
+cp .env.example .env         # edit at least one *_API_KEY
+docker compose up -d --build
+docker compose logs -f vce-hq
+```
+
+Change the published port with `VCE_HOST_PORT=9000 docker compose up -d`.
+
+### Bare-metal (development)
+
+```bash
+git clone https://github.com/sricharan-11/vce-hq.git && cd vce-hq
+python -m venv venv && source venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env         # edit at least one *_API_KEY
+python -m vce_hq
+```
+
+The API will be available at `http://localhost:8000`. Interactive docs at `/docs`.
+
+### Sign in with Google (GCP OAuth)
+
+VCE-HQ can derive a user's role from the tenant's GCP IAM policy — see [PRD §7.2](PRD_main_vB1.2.md).
+
+**One-time setup:**
+
+1. **Create an OAuth 2.0 Web Client** in Google Cloud Console → *APIs & Services → Credentials*. Set the authorized redirect URI to `https://<your-host>/auth/gcp/callback` (or `http://localhost:8000/auth/gcp/callback` for local runs).
+2. **Enable the Cloud Resource Manager API** on the project whose IAM policy will govern access.
+3. **Create a service account** with `roles/iam.securityReviewer` (or any role granting `resourcemanager.projects.getIamPolicy`) on that project. Download its JSON key.
+4. **Store the SA JSON in The Vault** through the UI, using the credential name `gcp-iam-lookup` (or whatever you set `VCE_GCP_IAM_CREDENTIAL_NAME` to).
+5. **Populate `.env`** with the OAuth client id/secret, redirect URI, project id, and (optionally) `VCE_GCP_ALLOWED_DOMAINS=yourcompany.com`. Flip `VCE_GCP_AUTH_ENABLED=true`.
+6. **Grant your users VCE roles in GCP IAM** — anyone with `roles/owner` becomes a VCE admin; anyone with `roles/viewer` becomes a VCE user (mapping is configurable via `VCE_GCP_ROLE_MAP_*`).
+7. Restart: `docker compose restart vce-hq`. The login page now shows a *Sign in with Google* button.
+
+Local username/password login (`admin`) always remains available for break-glass recovery.
 
 ---
 

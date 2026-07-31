@@ -1,11 +1,54 @@
-version: '3.8'
+# ══════════════════════════════════════════════════════════════════════
+#  VCE-HQ — one-command fresh deployment
+# ══════════════════════════════════════════════════════════════════════
+#  Usage on any host with Docker Engine + Compose v2:
+#      cp .env.example .env      # then edit secrets & API keys
+#      docker compose up -d --build
+#      docker compose logs -f vce-hq
+#
+#  The container is fully self-contained: SQLite + sqlite-vec data lives
+#  on the named volume `vce_hq_data`. Nothing on the host is touched.
+# ══════════════════════════════════════════════════════════════════════
+
+name: vce-hq
 
 services:
   vce-hq:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vce-hq:latest
     container_name: vce-hq
-    ports:
-      - "80:80"
+    restart: unless-stopped
     env_file:
       - .env
-    restart: unless-stopped
+    environment:
+      # These override .env when set here — pin the container-internal
+      # values so they can't drift from the compose contract.
+      VCE_HOST: "0.0.0.0"
+      VCE_PORT: "${VCE_PORT:-8000}"
+      VCE_DATA_DIR: "/app/data"
+    ports:
+      # <host>:<container>. VCE_HOST_PORT can be overridden per-environment.
+      - "${VCE_HOST_PORT:-8000}:${VCE_PORT:-8000}"
+    volumes:
+      - vce_hq_data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:${VCE_PORT:-8000}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      org.opencontainers.image.title: "VCE-HQ"
+      org.opencontainers.image.description: "Multi-tenant AI-powered infrastructure operations advisor"
+      org.opencontainers.image.source: "https://github.com/sricharan-11/vce-hq"
+
+volumes:
+  vce_hq_data:
+    name: vce_hq_data

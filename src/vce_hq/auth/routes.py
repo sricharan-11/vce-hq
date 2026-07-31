@@ -2,12 +2,16 @@ import sqlite3
 import uuid
 from typing import Annotated, List, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 
+from vce_hq.auth import gcp_oauth
 from vce_hq.auth.dependencies import get_auth_db, get_current_admin_user, get_current_user, User
 from vce_hq.auth.security import create_access_token, get_password_hash, verify_password
+from vce_hq.config import settings
+from vce_hq.db.connection import create_connection
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -130,3 +134,93 @@ async def delete_user(
     db.execute("DELETE FROM users WHERE id = ?", (user_id,))
     db.commit()
     return {"message": "User deleted successfully"}
+
+
+# ─── GCP OAuth 2.0 / OIDC (PRD §7.2) ──────────────────────────────────
+
+@router.get("/gcp/config")
+async def gcp_auth_config():
+    """UI polls this to decide whether to render the 'Sign in with Google' button."""
+    return {
+        "enabled": settings.gcp_auth_enabled,
+        "allowed_domains": settings.gcp_allowed_domains_list(),
+    }
+
+
+@router.get("/gcp/login")
+async def gcp_login(tenant_id: str):
+    if not settings.gcp_auth_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="GCP auth disabled")
+    if not settings.gcp_oauth_client_id or not settings.gcp_oauth_client_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GCP OAuth is not configured (missing client id/secret).",
+        )
+    url, _state = gcp_oauth.build_authorize_url(tenant_id=tenant_id)
+    return RedirectResponse(url=url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+
+@router.get("/gcp/callback")
+async def gcp_callback(
+    request: Request,
+    db: Annotated[sqlite3.Connection, Depends(get_auth_db)],
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+):
+    if not settings.gcp_auth_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="GCP auth disabled")
+    if error:
+        return _oauth_redirect_with_error(f"Google returned error: {error}")
+    if not code or not state:
+        return _oauth_redirect_with_error("Missing OAuth code or state.")
+
+    try:
+        state_payload = gcp_oauth.verify_state(state)
+    except ValueError as exc:
+        return _oauth_redirect_with_error(str(exc))
+
+    tenant_id = state_payload.get("tid")
+    if not tenant_id:
+        return _oauth_redirect_with_error("State payload missing tenant id.")
+
+    try:
+        identity = await gcp_oauth.exchange_code_and_verify(code)
+    except PermissionError as exc:
+        return _oauth_redirect_with_error(str(exc))
+    except Exception as exc:
+        return _oauth_redirect_with_error(f"Token exchange failed: {exc}")
+
+    # IAM role resolution uses the *tenant* DB (where the Vault SA lives).
+    tenant_conn = create_connection(settings.tenant_db_path(tenant_id))
+    try:
+        try:
+            vce_role, matched = gcp_oauth.resolve_role_from_iam(
+                tenant_conn, tenant_id, identity.email
+            )
+        except PermissionError as exc:
+            return _oauth_redirect_with_error(str(exc))
+        except LookupError as exc:
+            return _oauth_redirect_with_error(f"IAM lookup failed: {exc}")
+    finally:
+        tenant_conn.close()
+
+    user = gcp_oauth.upsert_oauth_user(db, identity, vce_role)
+    token = create_access_token(data={
+        "sub": user["username"],
+        "role": user["role"],
+        "auth": "gcp",
+        "matched_roles": matched,
+    })
+
+    # Hand token to the SPA via URL fragment (never hits server logs).
+    ui_url = f"/ui/#token={token}&role={user['role']}"
+    return RedirectResponse(url=ui_url, status_code=status.HTTP_302_FOUND)
+
+
+def _oauth_redirect_with_error(msg: str) -> RedirectResponse:
+    import urllib.parse
+    return RedirectResponse(
+        url=f"/ui/#oauth_error={urllib.parse.quote(msg)}",
+        status_code=status.HTTP_302_FOUND,
+    )

@@ -313,16 +313,60 @@ The platform operates under a flexible, env-var controlled `VCE_EXECUTION_MODE`.
 
 ## 7. Authentication & User Management
 
-### 7.1 Initial Installation & Access
-- The system features a dedicated standalone Authentication Module.
-- Upon initial installation/deployment, the system provisions a default `admin` user with a static, pre-configured password like VCE-HQ#2026 
+VCE-HQ supports **two coexisting authentication paths**. Both are always available so the local `admin` can recover the system if OAuth ever misfires (misconfigured client ID, revoked SA, GCP outage, etc.). Operators can hide the local form in the UI via a config flag when SSO is the intended primary path, but the endpoint remains reachable for break-glass recovery.
 
-### 7.2 User Management
-- The `admin` user has access to a dedicated **User Management Section** in the UI.
-- Within this section, the admin can change their password, and create/manage additional user accounts for the tenant.
+### 7.1 Local Authentication (Bootstrap / Break-Glass)
+- Standalone Authentication Module backed by the per-tenant SQLite DB.
+- On first deployment the system provisions a default `admin` user with a password sourced from `VCE_ADMIN_PASSWORD` (falls back to the PRD default `VCE-HQ#2026` if unset). `deploy.sh` auto-rotates this to a random value on fresh installs.
+- Passwords stored as bcrypt hashes. JWT (HS256) issued on success, TTL `VCE_JWT_EXPIRATION_MINUTES` (default 24h).
+- Purpose: bootstrap the tenant, configure The Vault, and recover access if GCP auth is unavailable.
 
-### 7.3 Data Store
-- All user identities, hashed passwords, and session data utilize the existing **per-tenant SQLite database**. There is no need for an external database like Postgres or Redis.
+### 7.2 GCP OAuth 2.0 (OIDC) with IAM-Derived Roles — Primary Path
+The recommended production auth mode. The user's **identity comes from Google**, and their **role comes from the tenant's GCP IAM policy** — VCE-HQ never manages a separate role assignment for OAuth users.
+
+**Flow**
+
+1. User clicks *Sign in with Google* on the login view.
+2. VCE-HQ redirects to Google's OAuth 2.0 consent endpoint (scopes: `openid`, `email`, `profile`).
+3. Google returns an authorization code to `GET /auth/gcp/callback`.
+4. VCE-HQ exchanges the code for `id_token` + `access_token`, verifies the ID token signature and audience against `VCE_GCP_OAUTH_CLIENT_ID`, and extracts `email` + `sub` (google_sub).
+5. If `VCE_GCP_ALLOWED_DOMAINS` is set, the `hd` claim (Google Workspace hosted domain) must match; otherwise reject.
+6. VCE-HQ resolves the tenant's GCP service account from **The Vault** and calls `projects.getIamPolicy` on `VCE_GCP_PROJECT_ID` (per-tenant project; single-project scope in M1, multi-project in v2).
+7. Bindings are filtered for `user:<email>` (and, transitively, `group:<g>` when the user is a member). The union of matching GCP roles is mapped to a VCE role via `VCE_GCP_ROLE_MAP_ADMIN` / `VCE_GCP_ROLE_MAP_USER`.
+8. A user with no matching binding is rejected — IAM is the source of truth. Removing a user in GCP removes their VCE access on next login (and on next background re-sync — see §7.4).
+9. VCE-HQ upserts the user row (`auth_method='gcp'`, `email`, `google_sub`, resolved `role`, `last_role_sync_at`) and issues the same VCE JWT used by the local path.
+
+**Configuration** (all `VCE_GCP_*` keys live in `.env`)
+
+| Key | Purpose |
+|---|---|
+| `VCE_GCP_AUTH_ENABLED` | Master toggle; when `false` the OAuth endpoints return 404 and the UI hides the button. |
+| `VCE_GCP_OAUTH_CLIENT_ID` / `VCE_GCP_OAUTH_CLIENT_SECRET` | OAuth 2.0 web-application client credentials issued in Google Cloud Console. |
+| `VCE_GCP_OAUTH_REDIRECT_URI` | Public callback URL, e.g. `https://vce.example.com/auth/gcp/callback`. |
+| `VCE_GCP_PROJECT_ID` | GCP project whose IAM policy is authoritative for role resolution (M1). |
+| `VCE_GCP_ALLOWED_DOMAINS` | Comma-separated Workspace domains permitted to sign in (empty = any Google account). |
+| `VCE_GCP_ROLE_MAP_ADMIN` | GCP roles mapped to VCE `admin` (default: `roles/owner,roles/resourcemanager.projectIamAdmin,roles/vce.admin`). |
+| `VCE_GCP_ROLE_MAP_USER` | GCP roles mapped to VCE `user` (default: `roles/editor,roles/viewer,roles/vce.user`). |
+| `VCE_GCP_ROLE_SYNC_TTL_MINUTES` | How often protected requests re-check IAM in the background (default: 15). |
+
+**Security properties**
+- No new credential surface: the IAM lookup reuses the tenant SA already scoped and stored in The Vault.
+- OAuth `state` parameter is signed with `VCE_JWT_SECRET_KEY` to prevent CSRF/replay on the callback.
+- `client_secret` never touches the browser; it lives only in the container's env.
+- Failed IAM lookups fail closed — the user is rejected, never silently promoted.
+
+### 7.3 User Management
+- The local `admin` continues to own a **User Management Section** in the UI for provisioning/rotating local users (break-glass and service accounts).
+- OAuth users are **implicitly provisioned** on first successful login — no manual creation step. Their VCE role is a projection of GCP IAM and cannot be edited from the UI; changes must be made in GCP.
+- Any local user can be disabled by the `admin`; any OAuth user can be disabled by removing their IAM binding in GCP.
+
+### 7.4 Role Freshness & Re-Sync
+- On every protected request, if `now - last_role_sync_at > VCE_GCP_ROLE_SYNC_TTL_MINUTES`, VCE-HQ re-runs the IAM lookup asynchronously and updates the row. The current request uses the JWT's role; the next request sees the refreshed value.
+- On IAM lookup failure (network, quota, revoked SA), the previous role is retained until the SA is fixed — logged as `WARN` and surfaced on the admin dashboard so operators notice a broken SA quickly.
+
+### 7.5 Data Store
+- All identities, hashed passwords (local), Google `sub` mappings (OAuth), session/JWT metadata, and the `last_role_sync_at` timestamp live in the existing **per-tenant SQLite database**. No external identity store (Postgres, Redis, Firebase, Auth0) is introduced.
+- Migration adds columns to `users`: `auth_method TEXT NOT NULL DEFAULT 'password'`, `email TEXT`, `google_sub TEXT UNIQUE`, `last_role_sync_at TEXT`. Existing rows are unaffected.
 
 ---
 
@@ -397,7 +441,8 @@ All incoming webhooks are normalized into this schema before being handed to the
 > - **Embedding model:** Google `text-embedding-005` for v1-v2. `gemini-embedding-2` (multimodal, 3072-dim) considered from v3+ if PDF/diagram ingestion is needed.
 > - **Allowlist → Blocklist Migration:** Documented tradeoff — Version A's allowlist model provides tighter control but creates operational friction at scale. Version B's blocklist model prioritizes velocity and extensibility, compensating for the wider surface area with deeper LLM Gate analysis, mandatory HITL for destructive operations, and a comprehensive global blocklist for universally dangerous patterns.
 
-> - **Authentication Module:** Decided against complex initial auth (like Google OAuth) for now to ensure easier on-prem/self-hosted deployment. Adopted a standalone Auth module utilizing the local SQLite DB. Features an initial default admin + static password setup, with password rotation and user provisioning handled within a built-in User Management UI.
+> - **Authentication Module (v1):** Adopted a standalone Auth module utilizing the local SQLite DB. Features an initial default admin + static password setup, with password rotation and user provisioning handled within a built-in User Management UI. This remains as the **break-glass** path so the system stays recoverable when SSO is misconfigured or GCP is unreachable.
+> - **GCP OAuth + IAM-Derived Roles (v1.1 — reversal of prior no-OAuth stance):** Added Google OAuth 2.0 (OIDC) as the primary authentication path. Role assignment is derived at login time from the tenant's GCP IAM policy via `projects.getIamPolicy`, using the tenant service account already stored in **The Vault** — no new credential surface. GCP roles are mapped to VCE roles via `VCE_GCP_ROLE_MAP_ADMIN` / `VCE_GCP_ROLE_MAP_USER`. Rationale for reversing the earlier decision: (a) the agents already consume GCP credentials, so requiring GCP identity for humans aligns operator and agent trust boundaries; (b) IAM as the source of truth means offboarding a user in GCP immediately removes their VCE access on next login/re-sync, closing a common lifecycle gap; (c) it avoids VCE-HQ becoming a parallel identity store to maintain.
 
 ---
 
