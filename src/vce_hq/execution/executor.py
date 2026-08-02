@@ -120,28 +120,28 @@ class CommandExecutor:
         reasoning: str = "",
         use_shell: bool = False,
         original_query: str = "",
-            adrs_context: str = "",
-            gate_ticket: str | None = None,
-            tenant_id: str = "unknown",
-        ) -> CommandResult:
-            """Validate and execute a command.
+        adrs_context: str = "",
+        gate_ticket: str | None = None,
+        tenant_id: str = "unknown",
+    ) -> CommandResult:
+        """Validate and execute a command.
 
-            The full flow:
-                1. Validate against blocklist system
-                2. Execute as subprocess with timeout
-                3. Capture and truncate output
-                4. Return structured result
+        The full flow:
+            1. Validate against blocklist system
+            2. Execute as subprocess with timeout
+            3. Capture and truncate output
+            4. Return structured result
 
-            Args:
-                command: The command string to execute.
-                env_overrides: Additional environment variables (e.g., cloud credentials).
-                    These are merged into the subprocess environment and NOT persisted.
-                reasoning: Why the agent chose to run this command (for audit).
-                use_shell: If ``True``, run the command via ``/bin/sh -c`` so that
-                    the container's full PATH (including cloud CLIs) is available.
-                    This is required for Cloud Engineer commands (gcloud, aws, az,
-                    kubectl). OS Engineer commands run without a shell for safety.
-                gate_ticket: A signed ticket from the Security Gate or HITL approval.
+        Args:
+            command: The command string to execute.
+            env_overrides: Additional environment variables (e.g., cloud credentials).
+                These are merged into the subprocess environment and NOT persisted.
+            reasoning: Why the agent chose to run this command (for audit).
+            use_shell: If ``True``, run the command via ``/bin/sh -c`` so that
+                the container's full PATH (including cloud CLIs) is available.
+                This is required for Cloud Engineer commands (gcloud, aws, az,
+                kubectl). OS Engineer commands run without a shell for safety.
+            gate_ticket: A signed ticket from the Security Gate or HITL approval.
 
         Returns:
             A ``CommandResult`` with captured output and metadata.
