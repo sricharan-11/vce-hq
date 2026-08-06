@@ -321,7 +321,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (turn.content.startsWith('[USER QUERY]: ')) {
                         appendMessage(turn.content.replace('[USER QUERY]: ', ''), 'user');
                     } else {
-                        const parsedHTML = marked.parse(turn.content);
+                        let parsedHTML = turn.content;
+                        if (typeof marked !== 'undefined') {
+                            parsedHTML = marked.parse(turn.content);
+                        }
                         appendMessage(parsedHTML, 'agent');
                     }
                 });
@@ -365,7 +368,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await response.json();
             
             // Remove loading
-            document.getElementById(loadingId).remove();
+            const loadingEl = document.getElementById(loadingId);
+            if (loadingEl) loadingEl.remove();
 
             // Track session for multi-turn conversations
             if (data.session_id) {
@@ -375,7 +379,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if(response.ok) {
                 // Parse markdown to HTML
-                const parsedAnalysis = marked.parse(data.analysis || "No analysis returned.");
+                let parsedAnalysis = data.analysis || "No analysis returned.";
+                if (typeof marked !== 'undefined') {
+                    parsedAnalysis = marked.parse(parsedAnalysis);
+                }
                 
                 let responseHTML = parsedAnalysis;
                 // Only show the security flag banner for genuine failures/warnings
@@ -393,8 +400,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 appendMessage(`Error: ${data.detail || 'Failed to analyze request.'}`, 'agent');
             }
         } catch (error) {
-            document.getElementById(loadingId).remove();
-            appendMessage(`Error: Could not connect to server.`, 'agent');
+            console.error(error);
+            const loadingEl = document.getElementById(loadingId);
+            if (loadingEl) loadingEl.remove();
+            appendMessage(`Error: Could not connect to server or parse response.`, 'agent');
         }
     }
 
@@ -417,7 +426,11 @@ document.addEventListener('DOMContentLoaded', () => {
             div.innerHTML = content; // Trusted HTML string
         } else {
             // Content is parsed HTML for agent, sanitize it!
-            div.innerHTML = DOMPurify.sanitize(content);
+            if (typeof DOMPurify !== 'undefined') {
+                div.innerHTML = DOMPurify.sanitize(content);
+            } else {
+                div.textContent = content; // Fallback safely
+            }
         }
 
         chatHistory.appendChild(div);
