@@ -435,7 +435,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if(!currentTenant) return;
         
         try {
-            const response = await authFetch('/vault/credentials', {
+            const response = await authFetch('/credentials/', {
                 headers: { 'X-Tenant-ID': currentTenant }
             });
             
@@ -495,7 +495,7 @@ document.addEventListener('DOMContentLoaded', () => {
         submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Storing...';
 
         try {
-            const response = await authFetch('/vault/credentials', {
+            const response = await authFetch('/credentials/', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -631,6 +631,19 @@ document.addEventListener('DOMContentLoaded', () => {
     if (refreshKnowledgeBtn) {
         refreshKnowledgeBtn.addEventListener('click', fetchKnowledge);
     }
+    
+    const knowledgeTableBody = document.querySelector('#knowledgeTable tbody');
+    if (knowledgeTableBody) {
+        knowledgeTableBody.addEventListener('click', (e) => {
+            const btn = e.target.closest('.delete-doc-btn');
+            if (btn) {
+                const docName = btn.getAttribute('data-doc-name');
+                if (docName) {
+                    deleteKnowledge(docName);
+                }
+            }
+        });
+    }
 
     async function fetchKnowledge() {
         const tbody = document.querySelector('#knowledgeTable tbody');
@@ -663,7 +676,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <td>${doc.chunks}</td>
                         <td>${date.toLocaleString()}</td>
                         <td>
-                            <button class="btn-danger btn-small" onclick="deleteKnowledge('${CSS.escape(doc.document_name)}')" title="Delete">
+                            <button class="btn-danger btn-small delete-doc-btn" data-doc-name="${DOMPurify.sanitize(doc.document_name).replace(/"/g, '&quot;')}" title="Delete">
                                 <i class="fa-solid fa-trash"></i>
                             </button>
                         </td>
