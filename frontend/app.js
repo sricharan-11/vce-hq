@@ -312,15 +312,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     const trimmed = (turn.content || '').trim();
                     if (!trimmed) return;
                     
-                    // Skip internal router/agent chatter — only show user queries and final responses
-                    if (trimmed.startsWith('[ROUTER')) return;
-                    if (trimmed.startsWith('[OS ENGINEER')) return;
-                    if (trimmed.startsWith('[CLOUD ENGINEER')) return;
-                    if (trimmed.startsWith('[FINOPS')) return;
-                    
+                    // Only show user queries and the final output from security review
                     if (turn.content.startsWith('[USER QUERY]: ')) {
                         appendMessage(turn.content.replace('[USER QUERY]: ', ''), 'user');
-                    } else {
+                    } else if (turn.agent === 'security_review') {
                         let parsedHTML = turn.content;
                         if (typeof marked !== 'undefined') {
                             parsedHTML = marked.parse(turn.content);
