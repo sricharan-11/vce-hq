@@ -176,9 +176,9 @@
     <div class="sidebar" id="sidebar">
         <div class="sidebar-header">
             Recent Requests
-            <div style="margin-top: 10px; font-size: 12px; font-weight: 400;">
-                <label for="tenantInput">Tenant ID:</label>
-                <input type="text" id="tenantInput" value="default" style="width: 100%; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; padding: 5px; border-radius: 4px; margin-top: 5px;" onchange="fetchRequests()">
+            <div style="margin-top: 10px; font-size: 12px; font-weight: 400; display: flex; gap: 5px;">
+                <input type="text" id="tenantInput" value="default" style="flex: 1; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; padding: 5px; border-radius: 4px;" placeholder="Tenant ID" onkeyup="if(event.key === 'Enter') fetchRequests()">
+                <button onclick="fetchRequests()" style="background: #238636; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer;">Load</button>
             </div>
         </div>
         <!-- Request items will be injected here -->
