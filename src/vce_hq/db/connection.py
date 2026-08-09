@@ -30,6 +30,9 @@ def create_connection(db_path: Path) -> sqlite3.Connection:
         - sqlite-vec extension loaded
         - Schema migrations applied
     """
+    # Ensure the parent directory exists
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
 
